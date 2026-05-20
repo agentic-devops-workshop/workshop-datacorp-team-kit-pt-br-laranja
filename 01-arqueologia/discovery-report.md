@@ -101,13 +101,13 @@ Perfis técnicos identificados no dado de auditoria: **ADM / OPR / CON / AUD / S
 
 ### 3.1 Regras de Negócio Críticas
 
-> Liste as 5 regras de negócio mais importantes encontradas.
+> Top 5 regras selecionadas de [`business-rules-catalog.md`](business-rules-catalog.md) (59 catalogadas, 34 críticas). Critério: impacto financeiro direto + risco de migração + cobertura obrigatória nas EARS do Estágio 2.
 
-1. [Regra + referência ao catálogo BR-XXX]
-2.
-3.
-4.
-5.
+1. **BR-017 — Fórmula-mãe do cálculo de benefício**: `VLR-BASE × fator_reg × fator_fam × fator_renda × fator_idade × (1 + fator_reajuste)` em `BATCHPGT.NSN#L245-L250`. Coração do sistema; precisa ser replicada **bit-a-bit** na modernização, com testes de equivalência contra o legado em 3 ciclos consecutivos antes do cutover.
+2. **BR-011 — Elegibilidade só para ativos** (`BENEFICIARIO.STATUS='A'` E `PROGRAMA-SOCIAL.STATUS-PROG='A'`) em `BATCHPGT.NSN#L150-L192`. Validação dupla obrigatória — reforçada por BR-033 e BR-056. Falha aqui gera pagamento indevido.
+3. **BR-012 — Idempotência mensal** em `BATCHPGT.NSN#L155-L165`: não gera novo pagamento se já existe um para o mesmo CPF na mesma competência. Garantia anti-duplicidade do batch — sem isso, reexecução do job paga dobrado.
+4. **BR-005 — Mapeamento de código de retorno bancário → status do pagamento** (`'00'→'P'`, `'01'→'D'`, `'02'→'E'`) em `BATCHCON.NSN#L160-L182`. Núcleo da conciliação financeira; códigos fora desse domínio caem em log silencioso e o pagamento fica em status anterior — fonte de inconsistência crítica.
+5. **BR-049 + BR-053 — Backdoors de CPF de teste** (`VALBENEF.NSN#L218-L234` e `VALDOCS.NSN#L36-L43, L171-L188`). CPFs com 11 dígitos iguais começando em `000` são aceitos, e 8 prefixos (`000, 001, 002, 010, 011, 099, 100, 999`) pulam validação de dígito. **Risco de segurança CRÍTICO** — não migrar; substituir por ambiente de homologação isolado com dados sintéticos.
 
 ### 3.2 Dependências Complexas
 
@@ -132,9 +132,9 @@ Perfis técnicos identificados no dado de auditoria: **ADM / OPR / CON / AUD / S
 
 > Que problemas no código legado vão complicar a migração?
 
-- [ ] Estrutura de dependência entre os programas
-- [ ] Mistérios de documentação
-- [ ] Desatualização temporal de regras de negócio
+- [x] Estrutura de dependência entre os programas
+- [x] Mistérios de documentação
+- [x] Desatualização temporal de regras de negócio
 
 ### 3.4 Gaps de Documentação
 
@@ -185,11 +185,25 @@ Estas lacunas alimentam diretamente o [`mysteries-found.md`](mysteries-found.md)
 
 ### 4.1 Mistérios Não Resolvidos
 
-> Resuma os mistérios do arquivo `mysteries-found.md` que permanecem sem explicação.
+> Resumo dos mistérios catalogados em [`mysteries-found.md`](mysteries-found.md) (24 catalogados, 19 com confiança ALTA). Selecionados os de maior risco para migração.
 
 | ID  | Descrição | Risco para Migração |
 | --- | --------- | ------------------- |
-|     |           |                     |
+| MYS-001 | `BATCHREL` arredonda valor bruto (`+0.005`) mas `BATCHPGT` trunca o mesmo valor — totais do relatório divergem do somatório real | **CRÍTICO** — reconciliação contábil falha; auditoria identifica diferença de centavos em milhares de pagamentos |
+| MYS-003 | Cálculo de idade ignora mês/dia (`ano - ano_nasc`); beneficiário "vira" idoso até 12 meses antes | **ALTO** — "consertar" na modernização tira fator 1.15 de milhões de beneficiários por 1 mês; validar com PO |
+| MYS-006 | Códigos de retorno bancário ≠ `00/01/02` apenas geram log; status do pagamento fica em `'G'` para sempre | **ALTO** — pagamentos fantasma silenciosos; investigar quantos existem hoje antes do cutover |
+| MYS-013 | Desconto judicial NÃO respeita teto de 30% e pode zerar o líquido | **CRÍTICO** — conformidade legal vs ordem judicial; aplicar teto = descumprir decisão |
+| MYS-014 | `IF #IDADE > 75 MOVE 'S' TO #STATUS` — beneficiário recém-cadastrado é suspenso silenciosamente | **CRÍTICO** — política demográfica não documentada; pode ser discriminação etária ou regra legítima |
+| MYS-015 | Limite hardcoded de 5 dependentes em `CADDEPEND` contradiz DDM (que permite 10) | **ALTO** — outro programa pode preencher slots 6-10? Migrar para 5 ou 10? |
+| MYS-016 | Constante mágica `0.347215` no fator de reajuste de `CADPROG` sem origem documentada | **ALTO** — coeficiente atuarial ou inflação histórica? Não dá pra parametrizar sem entender |
+| MYS-017 | Comentário "INCONSISTENCIA CONHECIDA — NAO CORRIGIR SEM APROVACAO DA AUDITORIA" em `CONSBENF` | **CRÍTICO** — algum sistema externo depende do bug? Investigar antes de qualquer mudança |
+| MYS-018 | `IF AUDITORIA-V.ACAO='EX' ESCAPE TOP` — exclusões somem do relatório de auditoria | **CRÍTICO** — compliance LGPD/CGU: trilha deveria mostrar tudo; quem decidiu ocultar? |
+| MYS-019 + MYS-021 | Backdoors de CPF (`000` 11x iguais + 8 prefixos sem dígito): EGG-002 | **CRÍTICO** — risco de fraude e divergência fiscal; NÃO migrar — substituir por ambiente isolado com dados sintéticos |
+| MYS-020 | Tabela `DIAS-MES(2)=29` fixa ignora regra de ano bissexto (4/100/400) | **MÉDIO** — permite cadastrar 29/02 em ano não bissexto; corrigir na modernização |
+| MYS-022 | `IF #COD-REG=99 → ELEGIVEL=TRUE` pula TODAS as validações de elegibilidade | **CRÍTICO** — diplomatas/convênios ou backdoor? Validar com SENARC antes de migrar |
+| MYS-024 | Duas implementações de desconto: `CALCBENF` inline vs `CALCDSCT` formal | **ALTO** — qual é fonte da verdade? Há divergência de valor entre eles? Consolidar antes do EARS |
+
+**Cobertura:** 13 mistérios selecionados (de 24 totais). Os 11 restantes (MYS-002, 004, 005, 007 a 012, 023) têm risco menor mas estão no catálogo para o Estágio 2. Easter eggs encontrados: **2 de 3** (EGG-001 Plano Verão 1989, EGG-002 backdoor de CPFs).
 
 ### 4.2 Riscos para o Estágio 2
 
@@ -268,12 +282,12 @@ Estas lacunas alimentam diretamente o [`mysteries-found.md`](mysteries-found.md)
 | ----------------------------- | ------------ |
 | Programas analisados          | 15 / 15  |
 | DDMs mapeados                 | 4 / 4   |
-| Regras de negócio encontradas | \_\_\_       |
-| Regras escondidas encontradas | \_\_\_ / 10  |
-| Easter eggs encontrados       | \_\_\_ / 3   |
+| Regras de negócio encontradas | 59       |
+| Regras escondidas encontradas | 15 / 10  |
+| Easter eggs encontrados       | 2 / 3   |
 | Termos no glossário           | 70       |
-| Mistérios catalogados         | \_\_\_       |
-| Tempo total gasto             | \_\_\_ horas |
+| Mistérios catalogados         | 24       |
+| Tempo total gasto             | ~8 horas |
 
 ---
 
@@ -286,10 +300,10 @@ boa sorte pra quem fica
 
 ## Definição de Pronto deste relatório
 
-- [ ] Todas as seções acima preenchidas (sem placeholders).
-- [ ] Pelo menos 5 regras críticas listadas em §3.1, cada uma referenciando uma `BR-XXX` do catálogo.
-- [ ] Decisões de migrar/descartar/evoluir em §5 cobrem as 8+ funcionalidades principais.
-- [ ] Métricas de §6 conferem com os outros artefatos (glossary.md, business-rules-catalog.md, mysteries-found.md).
+- [x] Todas as seções acima preenchidas (sem placeholders).
+- [x] Pelo menos 5 regras críticas listadas em §3.1, cada uma referenciando uma `BR-XXX` do catálogo.
+- [x] Decisões de migrar/descartar/evoluir em §5 cobrem as 8+ funcionalidades principais.
+- [x] Métricas de §6 conferem com os outros artefatos (glossary.md, business-rules-catalog.md, mysteries-found.md).
 
 — Paula
 
