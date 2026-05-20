@@ -67,7 +67,7 @@ O que NÃO conta: paginação de relatório, formatação de saída, manipulaç�
 | BR-019 | Truncamento para 2 casas decimais (não arredonda) | `01-arqueologia/legado-sifap/natural-programs/CALCBENF.NSN#L344-L347` | `PAGAMENTO.VLR-BRUTO`, `PAGAMENTO.VLR-LIQUIDO` | MÉDIO | Compatibilidade mainframe |
 | BR-020 | Valor líquido nunca pode ser negativo | `01-arqueologia/legado-sifap/natural-programs/CALCBENF.NSN#L378-L383` | `PAGAMENTO.VLR-LIQUIDO` | BAIXO | Proteção contra erro de cálculo |
 
-> Faixas de linha são aproximadas (contagem a partir do início do arquivo, incluindo o cabeçalho de comentários). Par 2 deve validar via `grep -n` antes da Passagem H1.
+> Faixas de linha são aproximadas (contagem a partir do início do arquivo, incluindo o cabeçalho de comentários). Par 2 deve validar via `grep -n` antes da passagem H1.
 
 | ID     | Regra de Negócio                                                                                                                       | Programa Fonte                                                                | Campos DDM                                                              | Nível de Risco | Notas                                                                                       |
 | ------ | -------------------------------------------------------------------------------------------------------------------------------------- | ----------------------------------------------------------------------------- | ----------------------------------------------------------------------- | -------------- | ------------------------------------------------------------------------------------------- |
@@ -122,7 +122,7 @@ O que NÃO conta: paginação de relatório, formatação de saída, manipulaç�
 
 - BR-047 (idempotência mensal), BR-054 (13º só em dezembro), BR-059 (cálculo de competência)
 
-## Resumo Estatístico (lote BATCH: BR-036 a BR-059)
+## Resumo Estatístico (programas batch: BR-036 a BR-059)
 
 - Total de regras encontradas neste lote: **24**
 - Regras críticas: **17**
