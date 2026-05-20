@@ -54,6 +54,20 @@
 | MYS-008 | Tolerância de divergência de R$ 0,01 sem comentário explicando origem (regra contábil? Histórico?)   | `BATCHCON.NSN#L150` (`IF #DIFF > 0.01`)                               | Mudar esse limiar afeta a métrica "% conciliado" reportada à gestão    | MÉDIA     |
 | MYS-009 | Abono dezembrino de 15% hardcoded; nenhum parâmetro em `PROGRAMA-SOCIAL`                             | `BATCHPGT.NSN#L268` (`#VLR-BENF * 0.15`)                              | Reajuste do abono exige mudança de código + deploy                     | MÉDIA     |
 | MYS-010 | Variáveis declaradas mas nunca usadas: `#FOUND`, `#I`, `#LOG-WORK` em BATCHPGT                       | `BATCHPGT.NSN` DEFINE DATA                                            | Indício de funcionalidade prevista (log de erros?) nunca implementada  | BAIXA     |
+| MYS-011 | Em dezembro, `CALCBENF` paga 13º salário e ainda aplica abono de 15% para programas tipo `A`          | `CALCBENF.NSN#L226-L247`                                              | Acúmulo intencional ou bug? Programa duplo (13º + abono) é prática SIFAP? | ALTA      |
+| MYS-012 | Truncagem sistemática via `*100/100` para 2 casas decimais em CALCBENF/CALCDSCT/CALCCORR (em vez de ROUND) | múltiplos programas CALC*.NSN                                     | Padrão herdado do mainframe ou erro? Diverge de BATCHREL (round)       | ALTA      |
+| MYS-013 | Desconto judicial NÃO respeita teto de 30%; pode zerar o líquido                                     | `CALCDSCT.NSN#L139-L144`                                              | Conformidade legal vs ordem judicial — qual prevalece?                 | ALTA      |
+| MYS-014 | `IF #IDADE > 75 MOVE 'S' TO #STATUS` — suspende beneficiário recém-cadastrado silenciosamente         | `CADBENEF.NSN#L165-L174`                                              | Por que 75? Política demográfica não documentada                       | ALTA      |
+| MYS-015 | Limite hardcoded de 5 dependentes em CADDEPEND contradiz DDM que permite 10 posições                 | `CADDEPEND.NSN#L59-L62`                                               | Programa só usa metade do PE? Outro programa preenche o resto?         | ALTA      |
+| MYS-016 | Constante mágica `0.347215` no fator de reajuste em CADPROG sem comentário/origem                    | `CADPROG.NSN#L75-L78`                                                 | Coeficiente atuarial? Inflação histórica?                              | ALTA      |
+| MYS-017 | Comentário explícito "INCONSISTENCIA CONHECIDA - NAO CORRIGIR SEM APROVACAO DA AUDITORIA" em CONSBENF | `CONSBENF.NSN#L168-L189`                                              | Por que auditoria proíbe correção? Algum sistema externo depende do bug? | ALTA    |
+| MYS-018 | `IF AUDITORIA-V.ACAO='EX' ESCAPE TOP` — exclusões somem do relatório de auditoria                    | `RELAUDIT.NSN#L98-L103`                                               | Compliance: trilha de auditoria deveria mostrar tudo. Quem decidiu ocultar? | ALTA  |
+| MYS-019 | CPF de 11 dígitos iguais é inválido EXCETO se prefixo for `000` (comentário: "TESTE GOVERNO")        | `VALBENEF.NSN#L218-L234`                                              | Backdoor para CPFs de teste? Ainda em uso em produção?                 | ALTA      |
+| MYS-020 | Tabela `DIAS-MES(2)=29` fixa em VALBENEF; ignora regra real de ano bissexto (4/100/400)              | `VALBENEF.NSN#L91, L257-L274`                                         | Permite cadastrar 29/02 em ano não bissexto. Bug conhecido?            | ALTA      |
+| MYS-021 | 8 prefixos CPF (`000, 001, 002, 010, 011, 099, 100, 999`) passam direto sem checagem de dígito       | `VALDOCS.NSN#L36-L43, L171-L188`                                      | Backdoor amplo de teste — quantos beneficiários reais usam esses prefixos? | ALTA  |
+| MYS-022 | `IF #COD-REG=99 → ELEGIVEL=TRUE; ESCAPE ROUTINE` pula TODAS as validações de elegibilidade           | `VALELEG.NSN#L91-L96`                                                 | Diplomatas? Convênios internacionais? Ou backdoor?                     | ALTA      |
+| MYS-023 | Bloco "Plano Verão 1989" comentado em CALCCORR — inativo há 25+ anos mas preservado no fonte         | `CALCCORR.NSN#L62-L72`                                                | Easter egg histórico ou possível reativação?                           | BAIXA     |
+| MYS-024 | Duas implementações de desconto: CALCBENF aplica desconto inline; CALCDSCT calcula formalmente       | `CALCBENF.NSN#L307-L315` vs `CALCDSCT.NSN`                            | Qual é o "fonte de verdade"? Há divergência de valor entre eles?       | ALTA      |
 
 ## Detalhamento dos Mistérios
 
@@ -176,17 +190,21 @@ NONE
 
 > Dica: existem **3 easter eggs** escondidos no código legado. Registre aqui os que encontrar:
 
-1. [ ] Easter Egg 1: **não encontrado neste lote (BATCHCON/BATCHREL/BATCHPGT)** — verificar com pares 1, 3, 4, 5
-2. [ ] Easter Egg 2: \_\_\_
-3. [ ] Easter Egg 3: \_\_\_
+1. [x] **EGG-001 · Plano Verão 1989 preservado como dead code** — bloco comentado em `CALCCORR.NSN#L62-L72` referenciando o plano econômico de janeiro/1989. Mantido por 25+ anos por superstição ou medo de remover.
+2. [x] **EGG-002 · Backdoor de CPFs especiais** — combinando `VALDOCS` (`#L36-L43`) e `VALBENEF` (`#L218-L234`):
+   - Em `VALDOCS`: prefixos `000, 001, 002, 010, 011, 099, 100, 999` aceitos sem validação de dígito.
+   - Em `VALBENEF`: CPF com 11 dígitos iguais é aceito quando começa com `000`.
+   - Comentário no fonte: `* CPFS INICIADOS COM 000 SAO VALIDOS (TESTE GOVERNO)`.
+   - **Impacto**: cadastro pode aceitar CPFs sintéticos em produção. Risco alto de fraude e divergência fiscal.
+3. [ ] **EGG-003** — ainda não localizado; varrer programas restantes / `legacy-docs/`.
 
 ## Resumo
 
-- Total de mistérios encontrados: **10**
-- Confiança alta: **6**
+- Total de mistérios encontrados: **24**
+- Confiança alta: **20**
 - Confiança média: **3**
 - Confiança baixa: **1**
-- Easter eggs encontrados: **0 / 3** (Par 2 não cobre os programas onde costumam estar — CAD*/CALC*/VAL*/CONS*/REL*)
+- Easter eggs encontrados: **2 / 3** (EGG-001 Plano Verão em CALCCORR; EGG-002 Backdoor CPF em VALDOCS+VALBENEF)
 
 ---
 
