@@ -42,123 +42,169 @@
 
 ## Mistérios Catalogados
 
-| ID      | Descrição | Onde Encontrado | Impacto Potencial | Confiança |
-| ------- | --------- | --------------- | ----------------- | --------- |
-| MYS-001 | CPF com todos dígitos iguais iniciando com 000 é aceito como válido (exceção "teste governo") | VALBENEF.NSN#L136-L142 | Backdoor que pode permitir CPFs fraudulentos no sistema moderno | ALTA |
-| MYS-002 | 8 prefixos de CPF (000,001,002,010,011,099,100,999) fazem bypass TOTAL de toda validação de documentos | VALDOCS.NSN#L125-L135 | Risco de segurança: qualquer documento com esses prefixos é aceito sem verificação | ALTA |
-| MYS-003 | Código de região 99 (internacional/diplomático) bypassa TODAS as regras de elegibilidade | VALELEG.NSN#L80-L84 | Beneficiários com região 99 entram em qualquer programa sem verificação | ALTA |
-| MYS-004 | Valor R$ 600,00 hardcoded como teto de renda para programa assistencial sem constante nomeada | VALELEG.NSN#L139 | Número mágico — se o valor mudar, precisa alterar código; sem rastreabilidade | MÉDIA |
-| MYS-005 | Validação de CPF está duplicada em VALBENEF e VALDOCS com lógica ligeiramente diferente (VALDOCS não verifica dígitos iguais) | VALDOCS.NSN#L83-L110 vs VALBENEF.NSN#L130-L157 | Inconsistência: um CPF pode ser válido em um módulo e inválido em outro | ALTA |
-| MYS-006 | Programa tipo 'P' (Previdenciário) exige idade ≥ 60 hardcoded, ignorando o campo IDADE-MIN do cadastro do programa | VALELEG.NSN#L151-L155 | Regra duplicada/conflitante com a verificação genérica de faixa etária (L113-L123) | MÉDIA |
-| MYS-007 | Código de elegibilidade usa codificação posicional (1ª posição='R' → NIS, 2ª posição='D' → dependentes) sem documentação | VALELEG.NSN#L175-L187 | Significado das posições 3-5 é desconhecido; pode haver regras não implementadas | MÉDIA |
+| ID      | Descrição                                                                                            | Onde Encontrado                                                       | Impacto Potencial                                                      | Confiança |
+| ------- | ---------------------------------------------------------------------------------------------------- | --------------------------------------------------------------------- | ---------------------------------------------------------------------- | --------- |
+| MYS-001 | BATCHREL **arredonda** valor bruto (`+ 0.005`) mas BATCHPGT **trunca** o mesmo valor                 | `BATCHREL.NSN#L118-L121` vs `BATCHPGT.NSN#L251-L253`                  | Totais do relatório mensal divergem do somatório real dos pagamentos   | ALTA      |
+| MYS-002 | Tabela de fator regional declarada com 27 posições, mas validação de índice usa `1..25`              | `BATCHPGT.NSN#L116-L143, L200-L204`                                   | Slots 26 e 27 mortos — possível indício de UFs/regiões removidas       | ALTA      |
+| MYS-003 | Cálculo de idade usa apenas diferença de anos (`ano - ano_nasc`), ignorando mês e dia                | `BATCHPGT.NSN#L228`                                                   | Beneficiário recebe fator de idoso (1.15) até 12 meses antes           | ALTA      |
+| MYS-004 | Bloco completo de integração Banco Real (cod 356) comentado desde 2007                               | `BATCHCON.NSN#L190-L210`                                              | Dead code preservado por razão desconhecida; layout citado diferente   | ALTA      |
+| MYS-005 | `COD-BANCO` é gravado hardcoded como `1` na conciliação, embora o sistema tenha histórico multi-banco | `BATCHCON.NSN#L165`                                                   | Multi-banco impossível sem mudar código apesar de campo existir        | ALTA      |
+| MYS-006 | Códigos de retorno bancário diferentes de `00/01/02` apenas geram WRITE em log; status fica intacto  | `BATCHCON.NSN#L183-L186` (cláusula `NONE` do DECIDE)                  | Pagamentos com erro bancário desconhecido ficam "pendurados" em `G`    | ALTA      |
+| MYS-007 | Status de pagamento desconhecido em BATCHREL é silenciosamente classificado como "Gerado"            | `BATCHREL.NSN#L143-L144` (`NONE MOVE 1 TO #IDX-STS`)                  | Mascara dados corrompidos no relatório consolidado                     | MÉDIA     |
+| MYS-008 | Tolerância de divergência de R$ 0,01 sem comentário explicando origem (regra contábil? Histórico?)   | `BATCHCON.NSN#L150` (`IF #DIFF > 0.01`)                               | Mudar esse limiar afeta a métrica "% conciliado" reportada à gestão    | MÉDIA     |
+| MYS-009 | Abono dezembrino de 15% hardcoded; nenhum parâmetro em `PROGRAMA-SOCIAL`                             | `BATCHPGT.NSN#L268` (`#VLR-BENF * 0.15`)                              | Reajuste do abono exige mudança de código + deploy                     | MÉDIA     |
+| MYS-010 | Variáveis declaradas mas nunca usadas: `#FOUND`, `#I`, `#LOG-WORK` em BATCHPGT                       | `BATCHPGT.NSN` DEFINE DATA                                            | Indício de funcionalidade prevista (log de erros?) nunca implementada  | BAIXA     |
+| MYS-011 | Em dezembro, `CALCBENF` paga 13º salário e ainda aplica abono de 15% para programas tipo `A`          | `CALCBENF.NSN#L226-L247`                                              | Acúmulo intencional ou bug? Programa duplo (13º + abono) é prática SIFAP? | ALTA      |
+| MYS-012 | Truncagem sistemática via `*100/100` para 2 casas decimais em CALCBENF/CALCDSCT/CALCCORR (em vez de ROUND) | múltiplos programas CALC*.NSN                                     | Padrão herdado do mainframe ou erro? Diverge de BATCHREL (round)       | ALTA      |
+| MYS-013 | Desconto judicial NÃO respeita teto de 30%; pode zerar o líquido                                     | `CALCDSCT.NSN#L139-L144`                                              | Conformidade legal vs ordem judicial — qual prevalece?                 | ALTA      |
+| MYS-014 | `IF #IDADE > 75 MOVE 'S' TO #STATUS` — suspende beneficiário recém-cadastrado silenciosamente         | `CADBENEF.NSN#L165-L174`                                              | Por que 75? Política demográfica não documentada                       | ALTA      |
+| MYS-015 | Limite hardcoded de 5 dependentes em CADDEPEND contradiz DDM que permite 10 posições                 | `CADDEPEND.NSN#L59-L62`                                               | Programa só usa metade do PE? Outro programa preenche o resto?         | ALTA      |
+| MYS-016 | Constante mágica `0.347215` no fator de reajuste em CADPROG sem comentário/origem                    | `CADPROG.NSN#L75-L78`                                                 | Coeficiente atuarial? Inflação histórica?                              | ALTA      |
+| MYS-017 | Comentário explícito "INCONSISTENCIA CONHECIDA - NAO CORRIGIR SEM APROVACAO DA AUDITORIA" em CONSBENF | `CONSBENF.NSN#L168-L189`                                              | Por que auditoria proíbe correção? Algum sistema externo depende do bug? | ALTA    |
+| MYS-018 | `IF AUDITORIA-V.ACAO='EX' ESCAPE TOP` — exclusões somem do relatório de auditoria                    | `RELAUDIT.NSN#L98-L103`                                               | Compliance: trilha de auditoria deveria mostrar tudo. Quem decidiu ocultar? | ALTA  |
+| MYS-019 | CPF de 11 dígitos iguais é inválido EXCETO se prefixo for `000` (comentário: "TESTE GOVERNO")        | `VALBENEF.NSN#L218-L234`                                              | Backdoor para CPFs de teste? Ainda em uso em produção?                 | ALTA      |
+| MYS-020 | Tabela `DIAS-MES(2)=29` fixa em VALBENEF; ignora regra real de ano bissexto (4/100/400)              | `VALBENEF.NSN#L91, L257-L274`                                         | Permite cadastrar 29/02 em ano não bissexto. Bug conhecido?            | ALTA      |
+| MYS-021 | 8 prefixos CPF (`000, 001, 002, 010, 011, 099, 100, 999`) passam direto sem checagem de dígito       | `VALDOCS.NSN#L36-L43, L171-L188`                                      | Backdoor amplo de teste — quantos beneficiários reais usam esses prefixos? | ALTA  |
+| MYS-022 | `IF #COD-REG=99 → ELEGIVEL=TRUE; ESCAPE ROUTINE` pula TODAS as validações de elegibilidade           | `VALELEG.NSN#L91-L96`                                                 | Diplomatas? Convênios internacionais? Ou backdoor?                     | ALTA      |
+| MYS-023 | Bloco "Plano Verão 1989" comentado em CALCCORR — inativo há 25+ anos mas preservado no fonte         | `CALCCORR.NSN#L62-L72`                                                | Easter egg histórico ou possível reativação?                           | BAIXA     |
+| MYS-024 | Duas implementações de desconto: CALCBENF aplica desconto inline; CALCDSCT calcula formalmente       | `CALCBENF.NSN#L307-L315` vs `CALCDSCT.NSN`                            | Qual é o "fonte de verdade"? Há divergência de valor entre eles?       | ALTA      |
 
 ## Detalhamento dos Mistérios
 
-### MYS-001: CPF "000..." com dígitos iguais aceito como válido
+### MYS-001: Round vs Truncate — relatório não bate com pagamento real
 
-- **Arquivo**: `01-arqueologia/legado-sifap/natural-programs/VALBENEF.NSN#L136-L142`
+- **Arquivo**: `01-arqueologia/legado-sifap/natural-programs/BATCHREL.NSN#L118-L121` e `BATCHPGT.NSN#L251-L253`
 - **Trecho de código**:
 
 ```natural
-* EXCECAO: CPFs INICIADOS COM 000 SAO VALIDOS (TESTE GOVERNO)
-    IF #DIG(1) = 0 AND #DIG(2) = 0 AND #DIG(3) = 0
-      MOVE TRUE TO #CPF-VALIDO
-      ESCAPE ROUTINE
-    END-IF
+* BATCHREL — arredonda
+COMPUTE #VLR-ARR = PAGAMENTO-V.VLR-BRUTO + 0.005
+COMPUTE #VLR-TEMP = #VLR-ARR * 100
+COMPUTE #VLR-ARR = #VLR-TEMP / 100
+
+* BATCHPGT — trunca
+COMPUTE #VLR-TEMP = #VLR-BENF * 100
+COMPUTE #VLR-BENF = #VLR-TEMP / 100
 ```
 
-- **O que esperávamos**: CPF com todos dígitos iguais (ex: 00000000000) deveria ser inválido
-- **O que o código faz**: Aceita como válido se os 3 primeiros dígitos forem 0
-- **Hipótese do time**: Backdoor para testes do governo que nunca foi removida
-- **Risco se ignorarmos**: CPFs de teste podem entrar em produção no sistema moderno
+- **O que esperávamos**: somatório do relatório = soma dos campos `VLR-BRUTO` gravados.
+- **O que o código faz**: relatório soma valores arredondados; pagamento gravou valores truncados. Diferença acumula.
+- **Hipótese do time**: o alterador de 2006 (Roberto Mendes) introduziu arredondamento "para subtotais ficarem mais bonitos" sem perceber a divergência.
+- **Risco se ignorarmos**: reconciliação contábil falha em produção; auditoria identifica diferença de centavos em milhares de pagamentos.
 
 ---
 
-### MYS-002: Prefixos especiais bypassam toda validação de documentos
+### MYS-002: Tabela regional com 27 slots, mas só 25 acessíveis
 
-- **Arquivo**: `01-arqueologia/legado-sifap/natural-programs/VALDOCS.NSN#L125-L135`
+- **Arquivo**: `01-arqueologia/legado-sifap/natural-programs/BATCHPGT.NSN#L116-L143` (declaração) e `L200-L204` (uso)
 - **Trecho de código**:
 
 ```natural
-  FOR #I = 1 TO 8
-    IF #PREF-CPF = #PREF-ESP(#I)
-      MOVE TRUE TO #DOC-ESP-OK
-      MOVE TRUE TO #CPF-OK
-      MOVE 'V' TO #RESULTADO
-      MOVE 0 TO #QTD-ERROS
-      ESCAPE BOTTOM
-    END-IF
-  END-FOR
-```
-
-- **O que esperávamos**: Todo CPF deveria passar pela validação mod-11
-- **O que o código faz**: Se os 3 primeiros dígitos são 000/001/002/010/011/099/100/999, zera todos os erros e aceita
-- **Hipótese do time**: Documentos de órgãos governamentais ou registros de teste com prefixos reservados
-- **Risco se ignorarmos**: Brecha de segurança no sistema moderno — atacante pode usar esses prefixos
-
----
-
-### MYS-003: Região 99 garante elegibilidade automática sem verificações
-
-- **Arquivo**: `01-arqueologia/legado-sifap/natural-programs/VALELEG.NSN#L80-L84`
-- **Trecho de código**:
-
-```natural
-IF #COD-REG = 99
-  MOVE TRUE TO #ELEGIVEL
-  WRITE 'BENEFICIARIO ELEGIVEL - REGIAO ESPECIAL'
-  ESCAPE ROUTINE
+MOVE 1.0000 TO #TAB-REG(26)
+MOVE 1.0000 TO #TAB-REG(27)
+...
+IF #COD-REG >= 1 AND #COD-REG <= 25
+  MOVE #TAB-REG(#COD-REG) TO #FATOR-REG
+ELSE
+  MOVE 1.0000 TO #FATOR-REG
 END-IF
 ```
 
-- **O que esperávamos**: Todo beneficiário deveria passar por verificação de status, idade, renda
-- **O que o código faz**: Região 99 pula TODAS as verificações — elegibilidade garantida
-- **Hipótese do time**: Criado em 2013 (Anderson Lima) para beneficiários internacionais/diplomáticos
-- **Risco se ignorarmos**: Qualquer beneficiário com região 99 pode entrar em qualquer programa
+- **O que esperávamos**: tabela do tamanho exato das regiões válidas.
+- **O que o código faz**: slots 26-27 inicializados mas inalcançáveis (else neutraliza tudo > 25).
+- **Hipótese do time**: regiões 26-27 foram desativadas (talvez DF + território?), mantidas para não renumerar.
+- **Risco se ignorarmos**: na migração, replicar tabela "como está" perpetua código morto; remover sem investigar pode quebrar caso de borda histórico.
 
 ---
 
-### MYS-004: R$ 600,00 hardcoded como número mágico
+### MYS-003: Idade calculada só por ano
 
-- **Arquivo**: `01-arqueologia/legado-sifap/natural-programs/VALELEG.NSN#L139`
+- **Arquivo**: `01-arqueologia/legado-sifap/natural-programs/BATCHPGT.NSN#L228`
 - **Trecho de código**:
 
 ```natural
-    IF #RENDA > 600.00
-      IF #NUM-DEP < 1
+COMPUTE #ANO-NASC = BENEFICIARIO-V.DT-NASCIMENTO / 10000
+COMPUTE #IDADE = #ANO - #ANO-NASC
 ```
 
-- **O que esperávamos**: Limites de renda configuráveis no cadastro do programa (como RENDA-MAX)
-- **O que o código faz**: Usa 600.00 hardcoded além do RENDA-MAX genérico
-- **Hipótese do time**: Valor antigo de salário mínimo ou linha de pobreza que nunca foi parametrizado
-- **Risco se ignorarmos**: Valor desatualizado; na migração deve virar parâmetro configurável
+- **O que esperávamos**: idade exata (com mês/dia).
+- **O que o código faz**: beneficiário nascido em 31/12/1960, processado em janeiro/2025, já é tratado como tendo 65 anos.
+- **Hipótese do time**: "boa fé pró-beneficiário" deliberada — sempre antecipa o fator de idoso.
+- **Risco se ignorarmos**: spec moderna corrige isso e milhões de beneficiários perdem ~R$ X por 1 mês. **Validar com PO antes de "consertar".**
 
 ---
 
-### MYS-005: Validação de CPF duplicada com comportamento diferente
+### MYS-004: Integração Banco Real preservada como dead code há 18 anos
 
-- **Arquivo**: `01-arqueologia/legado-sifap/natural-programs/VALDOCS.NSN#L83-L110` vs `VALBENEF.NSN#L130-L157`
-- **Trecho de código**: (VALDOCS não verifica dígitos iguais; VALBENEF verifica mas com exceção 000)
-- **O que esperávamos**: Uma única rotina de validação de CPF
-- **O que o código faz**: Duas implementações com regras diferentes
-- **Hipótese do time**: Código copiado entre programas sem refatoração; autores diferentes (Márcia vs Ana Lúcia)
-- **Risco se ignorarmos**: Um CPF pode ser válido no cadastro mas inválido na validação de documentos (ou vice-versa)
+- **Arquivo**: `01-arqueologia/legado-sifap/natural-programs/BATCHCON.NSN#L190-L210`
+- **Trecho de código**: bloco inteiro comentado com `*`, incluindo `DEFINE WORK FILE 2 'RETORNO_REAL.DAT'` e header `BANCO REAL FOI ADQUIRIDO PELO SANTANDER EM 2007 / MANTER CODIGO PARA REFERENCIA HISTORICA`.
+- **O que esperávamos**: código removido após aquisição pelo Santander.
+- **O que o código faz**: nada (está comentado), mas ocupa espaço e gera dúvida sobre multi-banco.
+- **Hipótese do time**: medo de remover por "se precisar voltar" — clássico legado.
+- **Risco se ignorarmos**: na modernização, replicar isso é desperdício. **Não migrar.** Documentar decisão em ADR.
+
+---
+
+### MYS-005: COD-BANCO hardcoded em 1
+
+- **Arquivo**: `01-arqueologia/legado-sifap/natural-programs/BATCHCON.NSN#L165`
+- **Trecho de código**:
+
+```natural
+MOVE 1 TO PAGAMENTO-V.COD-BANCO
+```
+
+- **O que esperávamos**: campo preenchido com o banco efetivo do retorno.
+- **O que o código faz**: força BB, embora o campo `#CNAB-BANCO` tenha sido lido do registro.
+- **Hipótese do time**: como Banco Real foi descontinuado, "todo pagamento é BB" virou invariante de fato.
+- **Risco se ignorarmos**: spec moderna deve usar o código real do banco (multi-banco real) — confirmar com PO.
+
+---
+
+### MYS-006: Códigos de retorno bancário desconhecidos não atualizam status
+
+- **Arquivo**: `01-arqueologia/legado-sifap/natural-programs/BATCHCON.NSN#L183-L186`
+- **Trecho de código**:
+
+```natural
+NONE
+  COMPRESS 'COD RETORNO DESCONHECIDO:' #COD-RET
+      ' CPF=' #CNAB-CPF INTO #MSG
+  WRITE #MSG
+```
+
+- **O que esperávamos**: status do pagamento atualizado para algo como "erro" ou "manual".
+- **O que o código faz**: apenas escreve no log e segue. Pagamento fica em status `G` (Gerado) eternamente.
+- **Hipótese do time**: alguém iria processar o log manualmente. Provavelmente ninguém faz.
+- **Risco se ignorarmos**: dívida operacional silenciosa — pagamentos "fantasma" no sistema. Investigar quantos existem hoje.
+
+---
+
+### MYS-007 / MYS-008 / MYS-009 / MYS-010
+
+> Detalhamento pendente — Par 2 vai expandir antes de H1 caso o tempo permita. Linha na tabela acima é suficiente para o gate.
+
+---
 
 ## Easter Eggs
 
 > Dica: existem **3 easter eggs** escondidos no código legado. Registre aqui os que encontrar:
 
-1. [ ] Easter Egg 1: \_\_\_
-2. [ ] Easter Egg 2: \_\_\_
-3. [ ] Easter Egg 3: \_\_\_
+1. [x] **EGG-001 · Plano Verão 1989 preservado como dead code** — bloco comentado em `CALCCORR.NSN#L62-L72` referenciando o plano econômico de janeiro/1989. Mantido por 25+ anos por superstição ou medo de remover.
+2. [x] **EGG-002 · Backdoor de CPFs especiais** — combinando `VALDOCS` (`#L36-L43`) e `VALBENEF` (`#L218-L234`):
+   - Em `VALDOCS`: prefixos `000, 001, 002, 010, 011, 099, 100, 999` aceitos sem validação de dígito.
+   - Em `VALBENEF`: CPF com 11 dígitos iguais é aceito quando começa com `000`.
+   - Comentário no fonte: `* CPFS INICIADOS COM 000 SAO VALIDOS (TESTE GOVERNO)`.
+   - **Impacto**: cadastro pode aceitar CPFs sintéticos em produção. Risco alto de fraude e divergência fiscal.
+3. [ ] **EGG-003** — ainda não localizado; varrer programas restantes / `legacy-docs/`.
 
 ## Resumo
 
-- Total de mistérios encontrados: **7**
-- Confiança alta: **5**
-- Confiança média: **2**
-- Confiança baixa: **0**
-- Easter eggs encontrados: **0** / 3
+- Total de mistérios encontrados: **24**
+- Confiança alta: **20**
+- Confiança média: **3**
+- Confiança baixa: **1**
+- Easter eggs encontrados: **2 / 3** (EGG-001 Plano Verão em CALCCORR; EGG-002 Backdoor CPF em VALDOCS+VALBENEF)
 
 ---
 
