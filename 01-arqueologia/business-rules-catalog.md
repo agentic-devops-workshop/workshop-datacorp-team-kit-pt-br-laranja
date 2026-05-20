@@ -44,7 +44,30 @@ O que NÃO conta: paginação de relatório, formatação de saída, manipulaç�
 
 ## Regras Encontradas
 
-> Faixas de linha são aproximadas (contagem a partir do início do arquivo, incluindo o cabeçalho de comentários). Par 2 deve validar via `grep -n` antes da Passagem H1.
+| ID     | Regra de Negócio | Programa Fonte | Campos DDM | Nível de Risco | Notas |
+| ------ | ---------------- | -------------- | ---------- | -------------- | ----- |
+| BR-001 | Tipos de desconto: Judicial, Pensão, Imposto, Sindical, Administrativo — cada um com fórmula e teto próprios | `01-arqueologia/legado-sifap/natural-programs/CALCDSCT.NSN#L80-L120` | `PAGAMENTO.TIPO-DSCT`, `PAGAMENTO.VLR-BRUTO`, `PAGAMENTO.VLR-TOTAL-DSCT` | ALTO | Judicial não tem teto; Sindical sempre 1% |
+| BR-002 | Desconto total não pode exceder 30% do valor bruto, exceto descontos judiciais (tipo J) | `01-arqueologia/legado-sifap/natural-programs/CALCDSCT.NSN#L60-L65` | `PAGAMENTO.VLR-BRUTO`, `PAGAMENTO.VLR-TOTAL-DSCT`, `PAGAMENTO.TIPO-DSCT` | CRÍTICO | Regra financeira. Tipo 'J' = exceção legal |
+| BR-003 | Desconto só é aplicado se estiver vigente (data início/fim) | `01-arqueologia/legado-sifap/natural-programs/CALCDSCT.NSN#L73-L80` | `BENEFICIARIO.DT-INICIO-DSCT`, `BENEFICIARIO.DT-FIM-DSCT` | MÉDIO | Controle de vigência de descontos |
+| BR-004 | Contribuição social obrigatória por faixa de renda: 3%, 5%, 7%, 9% | `01-arqueologia/legado-sifap/natural-programs/CALCDSCT.NSN#L45-L52` | `PAGAMENTO.VLR-BRUTO` | ALTO | Tabela de alíquotas, alterada em 2015 |
+| BR-005 | Não corrigir pagamento já marcado como corrigido | `01-arqueologia/legado-sifap/natural-programs/CALCCORR.NSN#L96-L99` | `PAGAMENTO.IND-CORRIGIDO` | MÉDIO | Garante idempotência |
+| BR-006 | Período de correção deve ser válido (competência inicial ≤ final) | `01-arqueologia/legado-sifap/natural-programs/CALCCORR.NSN#L85-L89` | `PAGAMENTO.COMPETENCIA` | BAIXO | Validação de entrada |
+| BR-007 | Correção retroativa: índice acumulado IPCA por competência | `01-arqueologia/legado-sifap/natural-programs/CALCCORR.NSN#L102-L110` | `PAGAMENTO.VLR-BRUTO`, `PAGAMENTO.VLR-CORRECAO` | ALTO | Fórmula financeira, depende de tabela IPCA |
+| BR-008 | Só aplicar correção se diferença for positiva | `01-arqueologia/legado-sifap/natural-programs/CALCCORR.NSN#L114-L125` | `PAGAMENTO.VLR-CORRECAO`, `PAGAMENTO.VLR-BRUTO` | MÉDIO | Evita gravação de correção nula |
+| BR-009 | Tabelas IPCA mensais (2010-2012) usadas para cálculo de correção | `01-arqueologia/legado-sifap/natural-programs/CALCCORR.NSN#L52-L108` | — | MÉDIO | Base histórica, manutenção periódica |
+| BR-010 | Só calcula benefício para beneficiário com status 'A' (ativo) | `01-arqueologia/legado-sifap/natural-programs/CALCBENF.NSN#L270-L273` | `BENEFICIARIO.STATUS` | ALTO | Pré-condição obrigatória |
+| BR-011 | Competência deve ser válida (mês 1-12) | `01-arqueologia/legado-sifap/natural-programs/CALCBENF.NSN#L253-L258` | `PAGAMENTO.COMPETENCIA` | BAIXO | Validação de entrada |
+| BR-012 | Fator regional aplicado conforme UF/região (27 regiões) | `01-arqueologia/legado-sifap/natural-programs/CALCBENF.NSN#L120-L146` | `BENEFICIARIO.COD-REGIAO`, `PAGAMENTO.VLR-BRUTO` | ALTO | Diferença de valores por localização |
+| BR-013 | Fator familiar progressivo conforme número de dependentes | `01-arqueologia/legado-sifap/natural-programs/CALCBENF.NSN#L307-L321` | `BENEFICIARIO.NUM-DEPENDENTES` | ALTO | Bônus por dependentes |
+| BR-014 | Fator renda: 5 faixas progressivas (quanto maior a renda, menor o fator) | `01-arqueologia/legado-sifap/natural-programs/CALCBENF.NSN#L151-L160` | `BENEFICIARIO.RENDA-FAMILIAR` | ALTO | Focalização social |
+| BR-015 | Fator idade: bônus para idosos (≥60) e menores (<18) | `01-arqueologia/legado-sifap/natural-programs/CALCBENF.NSN#L323-L337` | `BENEFICIARIO.DT-NASCIMENTO` | MÉDIO | Proteção a grupos vulneráveis |
+| BR-016 | Fórmula principal do benefício: BASE × FAT_REG × FAT_FAM × FAT_RENDA × FAT_IDADE × (1+REAJUSTE) | `01-arqueologia/legado-sifap/natural-programs/CALCBENF.NSN#L340-L347` | `PAGAMENTO.VLR-BRUTO`, `PROGRAMA.VLR-BASE`, `BENEFICIARIO.*` | CRÍTICO | Coração do cálculo do sistema |
+| BR-017 | 13º salário só em dezembro, fórmula diferenciada | `01-arqueologia/legado-sifap/natural-programs/CALCBENF.NSN#L349-L373` | `PAGAMENTO.TIPO-PGTO`, `PAGAMENTO.VLR-13` | ALTO | Não aplica fator família/renda |
+| BR-018 | Abono natalino: 15% extra só para programas tipo 'A' em dezembro | `01-arqueologia/legado-sifap/natural-programs/CALCBENF.NSN#L356-L365` | `PROGRAMA.TIPO`, `PAGAMENTO.VLR-ABONO` | MÉDIO | Regra específica para assistenciais |
+| BR-019 | Truncamento para 2 casas decimais (não arredonda) | `01-arqueologia/legado-sifap/natural-programs/CALCBENF.NSN#L344-L347` | `PAGAMENTO.VLR-BRUTO`, `PAGAMENTO.VLR-LIQUIDO` | MÉDIO | Compatibilidade mainframe |
+| BR-020 | Valor líquido nunca pode ser negativo | `01-arqueologia/legado-sifap/natural-programs/CALCBENF.NSN#L378-L383` | `PAGAMENTO.VLR-LIQUIDO` | BAIXO | Proteção contra erro de cálculo |
+
+> Faixas de linha são aproximadas (contagem a partir do início do arquivo, incluindo o cabeçalho de comentários). Par 2 deve validar via `grep -n` antes da passagem H1.
 
 | ID     | Regra de Negócio                                                                                                                       | Programa Fonte                                                                | Campos DDM                                                              | Nível de Risco | Notas                                                                                       |
 | ------ | -------------------------------------------------------------------------------------------------------------------------------------- | ----------------------------------------------------------------------------- | ----------------------------------------------------------------------- | -------------- | ------------------------------------------------------------------------------------------- |
@@ -99,9 +122,9 @@ O que NÃO conta: paginação de relatório, formatação de saída, manipulaç�
 
 - BR-047 (idempotência mensal), BR-054 (13º só em dezembro), BR-059 (cálculo de competência)
 
-## Resumo Estatístico
+## Resumo Estatístico (programas batch: BR-036 a BR-059)
 
-- Total de regras encontradas: **24**
+- Total de regras encontradas neste lote: **24**
 - Regras críticas: **17**
 - Regras com duplicação: **1** (truncate vs round entre BATCHPGT e BATCHREL — BR-053/BR-044)
 - Regras sem documentação (escondidas / magic numbers): **8** (BR-039, BR-041, BR-048 slots 26-27, BR-051 sem mês/dia, BR-055 0.15, BR-056 500/0.03, BR-059 mês corrente)
@@ -126,4 +149,3 @@ O que NÃO conta: paginação de relatório, formatação de saída, manipulaç�
 </table>
 
 <sub>↑ <a href="README.md">Voltar ao Kit PT-BR</a></sub>
-
