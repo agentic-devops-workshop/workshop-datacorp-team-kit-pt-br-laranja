@@ -67,6 +67,35 @@ O que NÃO conta: paginação de relatório, formatação de saída, manipulaç�
 | BR-019 | Truncamento para 2 casas decimais (não arredonda) | `01-arqueologia/legado-sifap/natural-programs/CALCBENF.NSN#L344-L347` | `PAGAMENTO.VLR-BRUTO`, `PAGAMENTO.VLR-LIQUIDO` | MÉDIO | Compatibilidade mainframe |
 | BR-020 | Valor líquido nunca pode ser negativo | `01-arqueologia/legado-sifap/natural-programs/CALCBENF.NSN#L378-L383` | `PAGAMENTO.VLR-LIQUIDO` | BAIXO | Proteção contra erro de cálculo |
 
+> Faixas de linha são aproximadas (contagem a partir do início do arquivo, incluindo o cabeçalho de comentários). Par 2 deve validar via `grep -n` antes da Passagem H1.
+
+| ID     | Regra de Negócio                                                                                                                       | Programa Fonte                                                                | Campos DDM                                                              | Nível de Risco | Notas                                                                                       |
+| ------ | -------------------------------------------------------------------------------------------------------------------------------------- | ----------------------------------------------------------------------------- | ----------------------------------------------------------------------- | -------------- | ------------------------------------------------------------------------------------------- |
+| BR-036 | Apenas registros CNAB tipo `'3'` (detalhe) são conciliados; cabeçalhos/trailers são descartados                                        | `01-arqueologia/legado-sifap/natural-programs/BATCHCON.NSN#L110-L113`         | —                                                                       | MÉDIO          | Layout CNAB 240 BB                                                                          |
+| BR-037 | Valores no arquivo CNAB chegam em **centavos** e devem ser divididos por 100 para virarem reais                                        | `01-arqueologia/legado-sifap/natural-programs/BATCHCON.NSN#L124-L126`         | `PAGAMENTO.VLR-LIQUIDO`                                                 | CRÍTICO        | Erro de unidade = pagamento 100× errado                                                     |
+| BR-038 | Conciliação bancária só ocorre se casarem **3 chaves**: `NUM-PAGTO` + `CPF-BENEF` + `COMPETENCIA`                                      | `01-arqueologia/legado-sifap/natural-programs/BATCHCON.NSN#L131-L137`         | `PAGAMENTO.NUM-PAGTO`, `CPF-BENEF`, `COMPETENCIA`                       | ALTO           | Match parcial é tratado como "não encontrado"                                                |
+| BR-039 | Tolerância de divergência de valor na conciliação é R$ 0,01 (diferença ≤ 1 centavo é conciliada)                                       | `01-arqueologia/legado-sifap/natural-programs/BATCHCON.NSN#L147-L152`         | `PAGAMENTO.VLR-LIQUIDO`                                                 | CRÍTICO        | Magic number sem documentação                                                                |
+| BR-040 | Código de retorno bancário → status do pagamento: `'00'`→`'P'` (Pago), `'01'`→`'D'` (Devolvido), `'02'`→`'E'` (Estornado)              | `01-arqueologia/legado-sifap/natural-programs/BATCHCON.NSN#L160-L182`         | `PAGAMENTO.STATUS-PGTO`, `COD-RETORNO`                                  | CRÍTICO        | Outros códigos viram apenas WRITE em log — pagamento fica em status anterior (silencioso)   |
+| BR-041 | Pagamento conciliado tem `COD-BANCO` fixado em `1` (hardcoded Banco do Brasil)                                                         | `01-arqueologia/legado-sifap/natural-programs/BATCHCON.NSN#L165`              | `PAGAMENTO.COD-BANCO`                                                   | ALTO           | Impede multi-banco apesar do histórico de "INC BANCO REAL"                                  |
+| BR-042 | Toda conciliação (sucesso ou divergência) gera registro em `AUDITORIA` com ação `'CO'` ou `'DV'`                                       | `01-arqueologia/legado-sifap/natural-programs/BATCHCON.NSN#L200-L235`         | `AUDITORIA.ACAO`, `TABELA-REF`, `CHAVE-REF`                             | ALTO           | LGPD/compliance — preservar na modernização                                                  |
+| BR-043 | Mapeamento `COD-REGIAO` → macro-região por faixa: 1-5=Norte, 6-10=Nordeste, 11-15=Sudeste, 16-20=Sul, 21+=Centro-Oeste                 | `01-arqueologia/legado-sifap/natural-programs/BATCHREL.NSN#L98-L114`          | `BENEFICIARIO.COD-REGIAO`                                               | ALTO           | Beneficiário sem região (cod=0) cai em Centro-Oeste por fallback                            |
+| BR-044 | Relatório consolidado **arredonda** valor bruto (`+ 0.005`) enquanto pagamento real é **truncado** → totais não batem                  | `01-arqueologia/legado-sifap/natural-programs/BATCHREL.NSN#L118-L121`         | `PAGAMENTO.VLR-BRUTO`                                                   | CRÍTICO        | Inconsistência financeira plantada — ver MYS-001                                            |
+| BR-045 | Domínio fechado de status do pagamento: `G`=Gerado, `P`=Pago, `C`=Cancelado, `D`=Devolvido, `E`=Estornado                              | `01-arqueologia/legado-sifap/natural-programs/BATCHREL.NSN#L132-L145`         | `PAGAMENTO.STATUS-PGTO`                                                 | ALTO           | Status desconhecido vira "Gerado" silenciosamente (fallback `NONE`)                          |
+| BR-046 | Geração de pagamento só ocorre para beneficiário com `STATUS = 'A'` (Ativo) e programa com `STATUS-PROG = 'A'`                         | `01-arqueologia/legado-sifap/natural-programs/BATCHPGT.NSN#L150-L192`         | `BENEFICIARIO.STATUS`, `PROGRAMA-SOCIAL.STATUS-PROG`                    | CRÍTICO        | Validação dupla — beneficiário e programa                                                    |
+| BR-047 | Idempotência mensal: não gera novo pagamento se já existe um para o mesmo CPF na mesma competência                                     | `01-arqueologia/legado-sifap/natural-programs/BATCHPGT.NSN#L155-L165`         | `PAGAMENTO.CPF-BENEF`, `COMPETENCIA`                                    | CRÍTICO        | Garantia anti-duplicidade do batch                                                           |
+| BR-048 | Fator regional aplicado ao benefício é indexado em tabela hardcoded de 27 posições (valores 1.00–1.40)                                 | `01-arqueologia/legado-sifap/natural-programs/BATCHPGT.NSN#L116-L143`         | `BENEFICIARIO.COD-REGIAO`                                               | CRÍTICO        | Posições 26 e 27 inicializadas mas inalcançáveis (range checado é 1-25) — ver MYS-002       |
+| BR-049 | Fator familiar escalonado: 0 dep=1.0; 1-2 dep=1.0+(n×0.05); 3-4 dep=1.10+((n-2)×0.03); ≥5 dep=1.16+((n-4)×0.02)                        | `01-arqueologia/legado-sifap/natural-programs/BATCHPGT.NSN#L210-L222`         | `BENEFICIARIO.NUM-DEPENDENTES`                                          | CRÍTICO        | Regra escalonada — testar com 0, 2, 4, 5, 10 dependentes                                    |
+| BR-050 | Faixas de renda familiar (5 faixas, fator decrescente): ≤300→1.00; ≤600→0.85; ≤1000→0.70; ≤1500→0.55; >1500→0.40                       | `01-arqueologia/legado-sifap/natural-programs/BATCHPGT.NSN#L155-L164`         | `BENEFICIARIO.RENDA-FAMILIAR`                                           | CRÍTICO        | Valores políticos — confirmar com PO antes de mudar                                          |
+| BR-051 | Fator idade: ≥65 anos=1.15 (idoso); ≥60=1.10; <18=1.05 (menor); demais=1.00                                                            | `01-arqueologia/legado-sifap/natural-programs/BATCHPGT.NSN#L230-L240`         | `BENEFICIARIO.DT-NASCIMENTO`                                            | ALTO           | Idade calculada só por ano (ignora mês/dia) — ver MYS-003                                   |
+| BR-052 | Fórmula do benefício bruto = `VLR-BASE × fator_reg × fator_fam × fator_renda × fator_idade × (1 + fator_reajuste)`                     | `01-arqueologia/legado-sifap/natural-programs/BATCHPGT.NSN#L245-L250`         | `PROGRAMA-SOCIAL.VLR-BASE`, `FATOR-REAJUSTE`                            | CRÍTICO        | Regra-mãe do sistema — replicar bit-a-bit                                                    |
+| BR-053 | Valores monetários são **truncados** (não arredondados) para 2 casas decimais via `INT(x×100)/100`                                     | `01-arqueologia/legado-sifap/natural-programs/BATCHPGT.NSN#L251-L253`         | `PAGAMENTO.VLR-BRUTO`, `VLR-LIQUIDO`                                    | CRÍTICO        | Política financeira oficial — diverge do BATCHREL (ver BR-044)                              |
+| BR-054 | 13º salário pago **apenas em dezembro** (mês=12), fórmula = `VLR-BASE × fator_reg × fator_idade` (sem fam, renda ou reajuste)          | `01-arqueologia/legado-sifap/natural-programs/BATCHPGT.NSN#L260-L266`         | `PAGAMENTO.TIPO-PGTO`, `VLR-BRUTO`                                      | CRÍTICO        | Tipo de pagamento marcado `'D'` em dezembro                                                  |
+| BR-055 | Abono de 15% sobre benefício mensal pago em dezembro **apenas para programas com `TIPO = 'A'`**                                        | `01-arqueologia/legado-sifap/natural-programs/BATCHPGT.NSN#L267-L271`         | `PROGRAMA-SOCIAL.TIPO`, `PAGAMENTO.VLR-ABONO`                           | CRÍTICO        | Magic number 0.15 sem comentário                                                             |
+| BR-056 | Desconto único de 3% aplicado somente quando bruto > R$ 500,00 (sem faixas progressivas)                                               | `01-arqueologia/legado-sifap/natural-programs/BATCHPGT.NSN#L282-L286`         | `PAGAMENTO.VLR-DESCONTO`                                                | CRÍTICO        | Magic numbers 500.00 e 0.03 — confirmar com PO                                              |
+| BR-057 | Valor líquido nunca pode ser negativo — piso em zero                                                                                   | `01-arqueologia/legado-sifap/natural-programs/BATCHPGT.NSN#L290-L292`         | `PAGAMENTO.VLR-LIQUIDO`                                                 | ALTO           | Proteção contra desconto > bruto                                                             |
+| BR-058 | Pagamento criado tem status inicial `'G'` (Gerado), aguardando processamento bancário downstream                                       | `01-arqueologia/legado-sifap/natural-programs/BATCHPGT.NSN#L305`              | `PAGAMENTO.STATUS-PGTO`                                                 | ALTO           | Máquina de estados: G → P/D/E (via BATCHCON)                                                |
+| BR-059 | Competência derivada da data de execução: `(ano × 100) + mês` no formato AAAAMM                                                        | `01-arqueologia/legado-sifap/natural-programs/BATCHPGT.NSN#L85-L87`           | `PAGAMENTO.COMPETENCIA`                                                 | MÉDIO          | Implica execução **no mês de competência** — rodar em janeiro gera comp do mês anterior?    |
+
 > Adicione mais linhas conforme necessário. Lembre-se: existem **10 regras escondidas** no código!
 
 ## Exemplo de linha bem preenchida
@@ -79,26 +108,26 @@ O que NÃO conta: paginação de relatório, formatação de saída, manipulaç�
 
 ### Cálculos Financeiros
 
-<!-- Liste aqui as regras relacionadas a cálculos de valores, benefícios, etc. -->
+- BR-037 (centavos → reais), BR-039 (tolerância R$ 0,01), BR-044 (round vs truncate), BR-048 (fator regional), BR-049 (fator familiar), BR-050 (faixas de renda), BR-051 (fator idade), BR-052 (fórmula principal), BR-053 (truncamento), BR-054 (13º), BR-055 (abono 15%), BR-056 (desconto 3%), BR-057 (piso zero)
 
 ### Validações de Status
 
-<!-- Liste aqui as regras de transição de status (A, S, C, I, D) -->
+- BR-040 (cod retorno → status), BR-045 (domínio fechado de status), BR-046 (apenas ativos), BR-058 (status inicial 'G')
 
 ### Regras de Autorização
 
-<!-- Liste aqui as regras de quem pode fazer o quê -->
+- (não identificadas neste lote de programas batch — verificar com Par 1/Par 4 nos `CADBENEF` e `VALELEG`)
 
 ### Regras de Negócio Temporais
 
-<!-- Liste aqui regras com prazos, datas-limite, períodos -->
+- BR-047 (idempotência mensal), BR-054 (13º só em dezembro), BR-059 (cálculo de competência)
 
 ## Resumo Estatístico
 
-- Total de regras encontradas: \_\_\_
-- Regras críticas: \_\_\_
-- Regras com duplicação: \_\_\_
-- Regras sem documentação (escondidas): \_\_\_
+- Total de regras encontradas: **24**
+- Regras críticas: **17**
+- Regras com duplicação: **1** (truncate vs round entre BATCHPGT e BATCHREL — BR-053/BR-044)
+- Regras sem documentação (escondidas / magic numbers): **8** (BR-039, BR-041, BR-048 slots 26-27, BR-051 sem mês/dia, BR-055 0.15, BR-056 500/0.03, BR-059 mês corrente)
 
 ---
 
@@ -120,4 +149,3 @@ O que NÃO conta: paginação de relatório, formatação de saída, manipulaç�
 </table>
 
 <sub>↑ <a href="README.md">Voltar ao Kit PT-BR</a></sub>
-
