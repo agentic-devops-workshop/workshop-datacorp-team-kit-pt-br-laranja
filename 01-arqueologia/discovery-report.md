@@ -113,21 +113,71 @@ Perfis técnicos identificados no dado de auditoria: **ADM / OPR / CON / AUD / S
 
 > Quais programas estão mais acoplados? Onde há risco de efeito cascata?
 
-[Descreva]
+**Observação estrutural:** não foram encontradas chamadas `CALLNAT` entre os 15 programas — todo o acoplamento entre rotinas ocorre via `PERFORM` (sub-rotinas internas) e, principalmente, via **acesso compartilhado aos mesmos DDMs Adabas**. O acoplamento é, portanto, **por dado**, não por contrato — o pior tipo para refatoração.
+
+**Pontos de maior acoplamento e risco de efeito cascata:**
+
+- **DDM `PAGAMENTO` (FNR 152, ~180M registros) — hub de acoplamento #1.** Lido/escrito por `BATCHPGT`, `CALCBENF`, `CALCCORR`, `CALCDSCT`, `CONSBENF`, `RELPGT`, `RELAUDIT`. Qualquer mudança em campo (especialmente os `MU` de parcelas) afeta 7 programas simultaneamente. **Risco: alto.**
+- **DDM `BENEFICIARIO` (FNR 150, ~4,2M registros) — hub #2.** Acessado por `CADBENEF`, `CADDEPEND`, `VALBENEF`, `VALELEG`, `VALDOCS`, `CONSBENF`, `CALCBENF`, `BATCHCON`. Campos `PE` (histórico de endereços) bloqueiam normalização. **Risco: alto.**
+- **Validações duplicadas em `VALDOCS` e `VALBENEF`** (evidência: BR-027 e BR-031 catalogadas como duplicação). Mesma regra implementada em dois lugares — corrigir uma sem a outra gera divergência silenciosa. **Risco: médio-alto.**
+- **Cadeia batch `BATCHCON → BATCHPGT → BATCHREL`** com dependência temporal implícita (não documentada). Se `BATCHCON` falha, `BATCHPGT` roda com dado inconsistente; se `BATCHPGT` não termina, `BATCHREL` gera relatório incompleto. Sem orquestrador formal — depende de JCL/JES2. **Risco: alto para o cutover.**
+- **`CALCCORR` (correção monetária) chamado via `PERFORM` por `CALCBENF` e por `BATCHPGT`** com regras de índice (TR/IGP-M) hardcoded. Mudança de fórmula impacta dois fluxos diferentes. **Risco: médio.**
+- **Campo `COD-PERFIL` em `AUDITORIA` (FNR 153)** referenciado em `RELAUDIT` e implicitamente em todos os programas que registram trilha. Adicionado em 2005 sem retrofit nos programas anteriores — coexistem registros com e sem perfil. **Risco: médio (qualidade de dado).**
+- **Códigos hardcoded de programas sociais** em `CADPROG` e `VALELEG` (IF/ELSE com IDs literais). Adicionar novo programa social exige tocar dois `.NSN` + recompilar. **Risco: médio (rigidez).**
+- **Identificadores físicos Adabas (ISN/FNR) vazando para a lógica de negócio** em vários programas. Migrar para PostgreSQL exige remapear chaves em todos os pontos. **Risco: alto (efeito cascata na migração de dados).**
+
+**Conclusão:** o sistema é monolítico-modular no papel, mas **fortemente acoplado por dado** (DDMs compartilhados) no concreto. Bounded contexts modernos terão que ser definidos com base em **dono do dado**, não em similaridade de função.
 
 ### 3.3 Dívida Técnica Identificada
 
 > Que problemas no código legado vão complicar a migração?
 
-- [ ] [Problema 1]
-- [ ] [Problema 2]
-- [ ] [Problema 3]
+- [ ] Estrutura de dependência entre os programas
+- [ ] Mistérios de documentação
+- [ ] Desatualização temporal de regras de negócio
+
+### 3.4 Gaps de Documentação
 
 ### 3.4 Gaps de Documentação
 
 > O que a documentação existente NÃO cobre?
 
-[Descreva]
+A documentação em `legacy-docs/` contém apenas três artefatos (`ARQUITETURA-ORIGINAL-1997.md`, `MANUAL-TECNICO-SIFAP-2008.md`, `REGRAS-NEGOCIO-2012.md`) e está **defasada em 13 anos** — última versão de 2012, nenhuma atualização até 2026. Lacunas identificadas:
+
+**Lacunas críticas (bloqueadoras para o Estágio 2):**
+
+- **Sem documentação pós-2012.** Toda mudança de regra de negócio entre 2012 e 2026 existe apenas no código `.NSN`. Não há changelog nem registro de versões.
+- **Sem call graph real.** O MANUAL-TECNICO descreve módulos, mas não o grafo de chamadas. Descobrimos por leitura de código que **não há `CALLNAT`** — apenas `PERFORM` interno e acoplamento por DDM — e isso não está documentado em lugar nenhum.
+- **FDT incompleto.** Os DDMs são listados, mas tipos de descritor `MU` (multi-value) e `PE` (periodic group) não são detalhados — justamente os anti-padrões que mais impactam a migração para PostgreSQL.
+- **Sem volumetria oficial.** Estimativas de ~4,2M beneficiários e ~180M pagamentos vêm da nossa análise, não de fonte oficial. Sem números reais, não é possível dimensionar infra Azure nem planejar migração de dados.
+- **Sem SLAs nem janelas batch.** Não há documentação de duração esperada de `BATCHCON`/`BATCHPGT`/`BATCHREL`, nem dependências formais entre jobs. Crítico para projetar Spring Batch + scheduling moderno.
+- **Sem integrações externas mapeadas.** A documentação não menciona SIAFI/SICAF/Receita ou qualquer sistema upstream/downstream. Improvável que SIFAP rode isolado.
+- **Matriz de autorização incompleta.** Perfis ADM/OPR/CON/AUD/SUP aparecem isoladamente, mas não existe matriz **perfil × operação × tela**. Descobrimos regras de autorização (BR-026, BR-035) apenas no código.
+
+**Regras de negócio órfãs (existem no código, ausentes na doc):**
+
+- Fórmula de **correção monetária** (`CALCCORR`) — TR/IGP-M sem regra documentada.
+- **Mascaramento de CPF** no `DISPLAY` (`CONSBENF`) — privacidade pré-LGPD não documentada.
+- **Hash de integridade / encadeamento de auditoria** (se existir no `AUDITORIA` pós-2005).
+- **Tratamento de erro e códigos de retorno** dos jobs batch — o que fazer se `BATCHPGT` falha no meio?
+- **Política de retenção** dos 180M de pagamentos — não há regra de arquivamento/expurgo documentada.
+- **Duplicação de regras** (BR-027, BR-031) — a doc não admite que `VALDOCS` e `VALBENEF` validam o mesmo dado.
+- **Limites hardcoded** (qtd máx. de dependentes, valor máx. de benefício) — existem no código, ausentes em `REGRAS-NEGOCIO-2012`.
+
+**Lacunas operacionais:**
+
+- Sem **runbooks** (o que fazer quando job batch falha às 3h da manhã).
+- Sem plano de **disaster recovery / backup** do Adabas — risco direto para o cutover.
+- Sem **métricas de uso** (beneficiários ativos, consultas/dia) — sem baseline para comparar pós-migração.
+- **Glossário de domínio ausente** na doc original (resolvido no Estágio 1 em [`glossary.md`](glossary.md)) — termos como "benefício suspenso" vs "cancelado" vs "inativo" não eram definidos.
+
+**Lacunas históricas:**
+
+- Sem registro de **por que** o DDM `AUDITORIA` só foi adicionado em 2005 (qual incidente motivou?).
+- Sem **ADRs históricos** explicando decisões (por que Natural? por que Adabas? alternativas descartadas?).
+- Sem **post-mortems** de incidentes — lições aprendidas perdidas.
+
+Estas lacunas alimentam diretamente o [`mysteries-found.md`](mysteries-found.md) e são insumo formal para perguntas a SENARC/CGPB antes do Estágio 2.
 
 ---
 
@@ -143,11 +193,23 @@ Perfis técnicos identificados no dado de auditoria: **ADM / OPR / CON / AUD / S
 
 ### 4.2 Riscos para o Estágio 2
 
-> O que o time de especificação precisa saber antes de começar?
+> O que o time de especificação precisa saber antes de começar o Spec-Driven Development (EARS + ADRs).
 
-1. [Risco 1]
-2. [Risco 2]
-3. [Risco 3]
+1. **Acoplamento por dado, não por contrato.** O legado não tem `CALLNAT` — só `PERFORM` e DDMs compartilhados. Bounded contexts NÃO podem ser recortados por similaridade de função; precisam ser definidos por **dono do dado** (quem escreve em `PAGAMENTO`? quem é fonte da verdade de `BENEFICIARIO`?). Risco: escrever EARS por módulo legado gera microsserviços anêmicos e transações distribuídas desnecessárias.
+2. **Cobertura `source_legacy:` ameaçada por documentação defasada.** A doc em `legacy-docs/` parou em 2012. 13 anos de regra de negócio só existem no `.NSN`. Cada EARS DEVE apontar para `01-arqueologia/legado-sifap/natural-programs/*.NSN` ou DDM — apontar apenas para `legacy-docs/*.md` é insuficiente porque a doc não reflete o estado real. O CI `legacy-traceability` vai rejeitar PRs.
+3. **Regras de negócio órfãs precisam de decisão antes de virar EARS.** Correção monetária (CALCCORR), mascaramento de CPF, política de retenção, tratamento de erro batch — não estão documentadas. Não escreva EARS chutando; abra ADR de "regra órfã" ou marque como `[GREENFIELD] + justificativa` com aprovação do PO.
+4. **Duplicação detectada (BR-027, BR-031) é armadilha.** `VALDOCS` e `VALBENEF` validam a mesma coisa. Se o Requirements Engineer transcrever as duas para EARS distintas, perpetua a duplicação no modelo moderno. Consolidar exige decisão arquitetural ANTES da spec — abrir ADR de "motor único de validação".
+5. **Volumetria não é oficial.** Estimativas (~4,2M beneficiários, ~180M pagamentos) vieram da nossa análise, não de fonte SENARC/CGPB. NFRs de performance/throughput nas EARS vão sair errados sem confirmar número real. Bloqueador para Software Architect dimensionar Azure.
+6. **SLAs e janelas batch ausentes.** Não há documentação de quanto tempo `BATCHPGT` leva nem dependências formais com `BATCHCON`/`BATCHREL`. EARS de NFR para o ciclo mensal precisam dessas métricas. Escalar para operação antes de escrever as specs de batch.
+7. **Identificadores físicos Adabas (ISN/FNR) vazaram para a lógica.** Cuidado ao escrever EARS que mencionem chaves — use linguagem de domínio (`numeroBeneficiario`, `idPagamento`), nunca ISN. Caso contrário, o modelo moderno herda o acoplamento físico.
+8. **Anti-padrões `MU`/`PE` precisam de ADR de modelagem antes de qualquer EARS de dados.** Decidir como normalizar (`pagamento_parcela`, `beneficiario_endereco_historico`) é pré-requisito. EARS escritas antes dessa decisão vão precisar ser reescritas.
+9. **Perfis ADM/OPR/CON/AUD/SUP sem matriz formal.** Toda EARS de autorização ("o sistema DEVE permitir...") precisa do perfil habilitado. Sem matriz **perfil × operação**, as specs ficam genéricas e abrem brecha de segurança. Construir a matriz é pré-requisito.
+10. **Integrações externas (SIAFI, CNAB 240/BB) mencionadas em §2.2 mas não exploradas no código.** Não existem programas `.NSN` de interface visíveis. Antes de spec de integração, mapear: arquivo, layout, frequência, contrato. Risco de descobrir tarde uma dependência crítica de cutover.
+11. **Mistérios do `mysteries-found.md` são tentação para "migrar e ver depois".** Política: nenhum mistério vira EARS sem explicação validada. Migrar mistério = perpetuar dívida. Catalogar como item de backlog do Estágio 4 (Evolução), não do Estágio 2.
+12. **Limites hardcoded no código (qtd dependentes, valor máx. benefício)** não estão em `REGRAS-NEGOCIO-2012`. Antes de escrever EARS com números, validar com PO se o limite ainda é vigente em 2026 — alguns podem ter sido alterados por portaria sem atualizar código.
+13. **Trilha de auditoria (AUDITORIA, FNR 153) é incompleta para LGPD.** Adicionada em 2005 sem retrofit. Specs de auditoria moderna não devem só replicar o legado — precisam atender LGPD (consent log, direito ao esquecimento, hash de integridade). Abrir ADR de auditoria antes das EARS.
+14. **Cadeia batch sem orquestrador formal (JCL/JES2).** O Estágio 2 precisa decidir orquestração moderna (Spring Batch + cron K8s? Azure Container Apps Jobs? Argo Workflows?) ANTES de escrever EARS de pipeline batch. ADR obrigatório.
+15. **Glossário de domínio recém-criado (Estágio 1) é a fonte da verdade.** Toda EARS DEVE usar termos do [`glossary.md`](glossary.md). Divergência de vocabulário entre Requirements Engineer e Software Architect quebra rastreabilidade. Não inventar termo novo — abrir PR no glossary primeiro.
 
 ---
 
@@ -159,9 +221,14 @@ Perfis técnicos identificados no dado de auditoria: **ADM / OPR / CON / AUD / S
 
 | Prioridade | Funcionalidade | Justificativa |
 | ---------- | -------------- | ------------- |
-| 1          |                |               |
-| 2          |                |               |
-| 3          |                |               |
+| 1          | Consulta de beneficiário (CONSBENF) | Read-only de altíssimo volume; libera operadores das telas 3270 sem risco transacional e gera evidência de equivalência logo no início. |
+| 2          | Cadastro de beneficiários + dependentes (CADBENEF, CADDEPEND) | Fonte da verdade do domínio. Migrar o dono do dado de `BENEFICIARIO` primeiro destrava o recorte correto dos bounded contexts modernos. |
+| 3          | Trilha de auditoria moderna (RELAUDIT + DDM AUDITORIA) | LGPD-by-design exige audit log estruturado ANTES de qualquer escrita produtiva moderna; bloqueia avanço se deixado pra depois. |
+| 4          | Motor único de elegibilidade e validação (VALELEG + VALBENEF + VALDOCS) | Resolve a duplicação detectada (BR-027/BR-031) na origem; pré-requisito para o cálculo moderno não herdar a dívida. |
+| 5          | Cadastro de programas sociais como dado (CADPROG) | Tira o hardcode IF/ELSE, dá autonomia ao negócio (SENARC/CGPB) para criar/alterar programas sem deploy — valor político alto. |
+| 6          | Cálculo de benefício + desconto (CALCBENF, CALCDSCT) | Coração financeiro da política pública; migra com parâmetros externalizados e validação bit-a-bit contra o mainframe em paralelo. |
+| 7          | Geração do ciclo mensal de pagamento (BATCHPGT) | Job mais crítico do sistema; só vai para produção após 3 ciclos consecutivos idênticos ao legado, com dry-run obrigatório (Spring Batch). |
+| 8          | Dashboards gerenciais (substituindo RELPGT spool) | Quando o pagamento moderno é fonte da verdade, relatórios viram dashboards interativos — entrega valor visível sem risco operacional. |
 
 ### 5.2 O que descartar
 
@@ -214,8 +281,7 @@ Perfis técnicos identificados no dado de auditoria: **ADM / OPR / CON / AUD / S
 
 > Deixe aqui mensagens para o time no Estágio 2 (Especificação Moderna):
 
-[Escreva aqui]
-
+boa sorte pra quem fica
 ---
 
 ## Definição de Pronto deste relatório
