@@ -122,9 +122,9 @@ O que NÃO conta: paginação de relatório, formatação de saída, manipulaç�
 
 - BR-047 (idempotência mensal), BR-054 (13º só em dezembro), BR-059 (cálculo de competência)
 
-## Resumo Estatístico
+## Resumo Estatístico (lote BATCH: BR-036 a BR-059)
 
-- Total de regras encontradas: **24**
+- Total de regras encontradas neste lote: **24**
 - Regras críticas: **17**
 - Regras com duplicação: **1** (truncate vs round entre BATCHPGT e BATCHREL — BR-053/BR-044)
 - Regras sem documentação (escondidas / magic numbers): **8** (BR-039, BR-041, BR-048 slots 26-27, BR-051 sem mês/dia, BR-055 0.15, BR-056 500/0.03, BR-059 mês corrente)
