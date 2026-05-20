@@ -42,28 +42,52 @@
 
 ## Mistérios Catalogados
 
-| ID      | Descrição                                                                          | Onde Encontrado                                | Impacto Potencial                                              | Confiança |
-| ------- | ---------------------------------------------------------------------------------- | ---------------------------------------------- | -------------------------------------------------------------- | --------- |
-| MYS-002 | Tabela `#TAB-REG` tem 27 posições mas `IF` só permite índices 1–25                 | `CALCBENF.NSN` L100 + L162–166                 | Migração pode tratar 27 regiões; código real ignora 26 e 27    | ALTA      |
-| MYS-003 | Constante mágica `#TAB-REG(15) = 1.0000` rotulada apenas como `/* REF */`          | `CALCBENF.NSN` L121                            | Significado de "REF" perdido; provável fator de referência (SP/Sudeste). Confundir = recalibrar todo o País | MÉDIA |
-| MYS-004 | Em dezembro (`#MES = 12`) o cálculo muda: soma 13º + abono natalino 15% (tipo 'A') | `CALCBENF.NSN` L226–247                        | Se não preservado, beneficiários perdem 13º e abono em dezembro | ALTA      |
-| MYS-005 | Truncagem sistemática via `*100 / 100` (sem `ROUND`) — perda de centavos          | `CALCBENF.NSN` L213, L233, L242, L262; `CALCDSCT.NSN` L62, L177; `CALCCORR.NSN` L113 | Implementação moderna com `ROUND` ou `BigDecimal` HALF_UP causa divergência sistemática vs. legado | ALTA |
-| MYS-006 | Desconto `J` (Judicial) ignora teto de 30% que se aplica a todos os demais tipos  | `CALCDSCT.NSN` L139–144 (comentário "JUDICIAL NAO TEM TETO") | Ordem judicial pode levar líquido a zero ou negativo; migração ingênua aplicaria teto e violaria decisão judicial | ALTA |
-| INC-004 | Cálculo de descontos coexiste em duas versões divergentes                          | `CALCBENF.NSN` L307–315 (subrotina simples 3%) vs. `CALCDSCT.NSN` (lógica completa) | Qual é a verdade? Depende do caminho de invocação. Pagamentos podem ser gerados com desconto errado | ALTA |
-| EGG-001 | Bloco comentado mantido "para histórico" — correção do Plano Verão (1989–1991)    | `CALCCORR.NSN` L62–72                          | Código morto; pode ser removido. Sinaliza que houve correções monetárias compostas no Cruzado→Cruzeiro | ALTA |
+| ID      | Descrição                                                                                            | Onde Encontrado                                                       | Impacto Potencial                                                      | Confiança |
+| ------- | ---------------------------------------------------------------------------------------------------- | --------------------------------------------------------------------- | ---------------------------------------------------------------------- | --------- |
+| MYS-001 | BATCHREL **arredonda** valor bruto (`+ 0.005`) mas BATCHPGT **trunca** o mesmo valor                 | `BATCHREL.NSN#L118-L121` vs `BATCHPGT.NSN#L251-L253`                  | Totais do relatório mensal divergem do somatório real dos pagamentos   | ALTA      |
+| MYS-002 | Tabela de fator regional declarada com 27 posições, mas validação de índice usa `1..25`              | `BATCHPGT.NSN#L116-L143, L200-L204`                                   | Slots 26 e 27 mortos — possível indício de UFs/regiões removidas       | ALTA      |
+| MYS-003 | Cálculo de idade usa apenas diferença de anos (`ano - ano_nasc`), ignorando mês e dia                | `BATCHPGT.NSN#L228`                                                   | Beneficiário recebe fator de idoso (1.15) até 12 meses antes           | ALTA      |
+| MYS-004 | Bloco completo de integração Banco Real (cod 356) comentado desde 2007                               | `BATCHCON.NSN#L190-L210`                                              | Dead code preservado por razão desconhecida; layout citado diferente   | ALTA      |
+| MYS-005 | `COD-BANCO` é gravado hardcoded como `1` na conciliação, embora o sistema tenha histórico multi-banco | `BATCHCON.NSN#L165`                                                   | Multi-banco impossível sem mudar código apesar de campo existir        | ALTA      |
+| MYS-006 | Códigos de retorno bancário diferentes de `00/01/02` apenas geram WRITE em log; status fica intacto  | `BATCHCON.NSN#L183-L186` (cláusula `NONE` do DECIDE)                  | Pagamentos com erro bancário desconhecido ficam "pendurados" em `G`    | ALTA      |
+| MYS-007 | Status de pagamento desconhecido em BATCHREL é silenciosamente classificado como "Gerado"            | `BATCHREL.NSN#L143-L144` (`NONE MOVE 1 TO #IDX-STS`)                  | Mascara dados corrompidos no relatório consolidado                     | MÉDIA     |
+| MYS-008 | Tolerância de divergência de R$ 0,01 sem comentário explicando origem (regra contábil? Histórico?)   | `BATCHCON.NSN#L150` (`IF #DIFF > 0.01`)                               | Mudar esse limiar afeta a métrica "% conciliado" reportada à gestão    | MÉDIA     |
+| MYS-009 | Abono dezembrino de 15% hardcoded; nenhum parâmetro em `PROGRAMA-SOCIAL`                             | `BATCHPGT.NSN#L268` (`#VLR-BENF * 0.15`)                              | Reajuste do abono exige mudança de código + deploy                     | MÉDIA     |
+| MYS-010 | Variáveis declaradas mas nunca usadas: `#FOUND`, `#I`, `#LOG-WORK` em BATCHPGT                       | `BATCHPGT.NSN` DEFINE DATA                                            | Indício de funcionalidade prevista (log de erros?) nunca implementada  | BAIXA     |
 
 ## Detalhamento dos Mistérios
 
-### MYS-002: Tabela regional com slots fantasmas (26 e 27 "RESERVA")
+### MYS-001: Round vs Truncate — relatório não bate com pagamento real
 
-- **Arquivo**: `01-arqueologia/legado-sifap/natural-programs/CALCBENF.NSN#L100-L166`
+- **Arquivo**: `01-arqueologia/legado-sifap/natural-programs/BATCHREL.NSN#L118-L121` e `BATCHPGT.NSN#L251-L253`
 - **Trecho de código**:
 
 ```natural
-1 #TAB-REG  (N3.4/27)
-...
-MOVE 1.0000 TO #TAB-REG(26)  /* RESERVA */
-MOVE 1.0000 TO #TAB-REG(27)  /* RESERVA */
+* BATCHREL — arredonda
+COMPUTE #VLR-ARR = PAGAMENTO-V.VLR-BRUTO + 0.005
+COMPUTE #VLR-TEMP = #VLR-ARR * 100
+COMPUTE #VLR-ARR = #VLR-TEMP / 100
+
+* BATCHPGT — trunca
+COMPUTE #VLR-TEMP = #VLR-BENF * 100
+COMPUTE #VLR-BENF = #VLR-TEMP / 100
+```
+
+- **O que esperávamos**: somatório do relatório = soma dos campos `VLR-BRUTO` gravados.
+- **O que o código faz**: relatório soma valores arredondados; pagamento gravou valores truncados. Diferença acumula.
+- **Hipótese do time**: o alterador de 2006 (Roberto Mendes) introduziu arredondamento "para subtotais ficarem mais bonitos" sem perceber a divergência.
+- **Risco se ignorarmos**: reconciliação contábil falha em produção; auditoria identifica diferença de centavos em milhares de pagamentos.
+
+---
+
+### MYS-002: Tabela regional com 27 slots, mas só 25 acessíveis
+
+- **Arquivo**: `01-arqueologia/legado-sifap/natural-programs/BATCHPGT.NSN#L116-L143` (declaração) e `L200-L204` (uso)
+- **Trecho de código**:
+
+```natural
+MOVE 1.0000 TO #TAB-REG(26)
+MOVE 1.0000 TO #TAB-REG(27)
 ...
 IF #COD-REG >= 1 AND #COD-REG <= 25
   MOVE #TAB-REG(#COD-REG) TO #FATOR-REG
@@ -72,129 +96,79 @@ ELSE
 END-IF
 ```
 
-- **O que esperávamos**: tabela com 27 posições significa 27 regiões válidas.
-- **O que o código faz**: dimensiona 27 mas só aceita 1–25. Índices 26 e 27 são código morto. Qualquer `COD-REG` fora desse range cai no `ELSE` e recebe fator 1.0000 (regra silenciosa).
-- **Hipótese do time**: alguém previu expansão futura ("RESERVA") que nunca aconteceu; o `IF` ficou amarrado em 25.
-- **Risco se ignorarmos**: na migração, manter `27` no schema enquanto o domínio real é `25` perpetua confusão. Pior: o fallback `1.0000` mascara dados ruins (UF inválida) sem alertar.
+- **O que esperávamos**: tabela do tamanho exato das regiões válidas.
+- **O que o código faz**: slots 26-27 inicializados mas inalcançáveis (else neutraliza tudo > 25).
+- **Hipótese do time**: regiões 26-27 foram desativadas (talvez DF + território?), mantidas para não renumerar.
+- **Risco se ignorarmos**: na migração, replicar tabela "como está" perpetua código morto; remover sem investigar pode quebrar caso de borda histórico.
 
 ---
 
-### MYS-003: Constante "REF" — o que é a Região 15?
+### MYS-003: Idade calculada só por ano
 
-- **Arquivo**: `01-arqueologia/legado-sifap/natural-programs/CALCBENF.NSN#L121`
+- **Arquivo**: `01-arqueologia/legado-sifap/natural-programs/BATCHPGT.NSN#L228`
 - **Trecho de código**:
 
 ```natural
-MOVE 1.0000 TO #TAB-REG(15)  /* REF */
+COMPUTE #ANO-NASC = BENEFICIARIO-V.DT-NASCIMENTO / 10000
+COMPUTE #IDADE = #ANO - #ANO-NASC
 ```
 
-- **O que esperávamos**: cada índice 1–25 mapeia uma UF (ex.: 11=SP, 12=RJ…).
-- **O que o código faz**: índice 15 está rotulado apenas como "REF" — todas as outras 24 posições têm sigla de UF. Não há documentação em `legacy-docs/` explicando.
-- **Hipótese do time**: "REF" = REFERÊNCIA — fator-base 1.0000 usado para normalizar os demais (provavelmente sigla DF ou um pseudo-estado). Pode ser também marcador para beneficiários sem UF cadastrada.
-- **Risco se ignorarmos**: confundir "REF" com uma UF real causa erro de cálculo silencioso. Modelagem moderna precisa decidir se vira `enum` separado, `null` ou registro especial.
+- **O que esperávamos**: idade exata (com mês/dia).
+- **O que o código faz**: beneficiário nascido em 31/12/1960, processado em janeiro/2025, já é tratado como tendo 65 anos.
+- **Hipótese do time**: "boa fé pró-beneficiário" deliberada — sempre antecipa o fator de idoso.
+- **Risco se ignorarmos**: spec moderna corrige isso e milhões de beneficiários perdem ~R$ X por 1 mês. **Validar com PO antes de "consertar".**
 
 ---
 
-### MYS-004: Dezembro muda tudo — 13º salário e abono natalino
+### MYS-004: Integração Banco Real preservada como dead code há 18 anos
 
-- **Arquivo**: `01-arqueologia/legado-sifap/natural-programs/CALCBENF.NSN#L226-L247`
+- **Arquivo**: `01-arqueologia/legado-sifap/natural-programs/BATCHCON.NSN#L190-L210`
+- **Trecho de código**: bloco inteiro comentado com `*`, incluindo `DEFINE WORK FILE 2 'RETORNO_REAL.DAT'` e header `BANCO REAL FOI ADQUIRIDO PELO SANTANDER EM 2007 / MANTER CODIGO PARA REFERENCIA HISTORICA`.
+- **O que esperávamos**: código removido após aquisição pelo Santander.
+- **O que o código faz**: nada (está comentado), mas ocupa espaço e gera dúvida sobre multi-banco.
+- **Hipótese do time**: medo de remover por "se precisar voltar" — clássico legado.
+- **Risco se ignorarmos**: na modernização, replicar isso é desperdício. **Não migrar.** Documentar decisão em ADR.
+
+---
+
+### MYS-005: COD-BANCO hardcoded em 1
+
+- **Arquivo**: `01-arqueologia/legado-sifap/natural-programs/BATCHCON.NSN#L165`
 - **Trecho de código**:
 
 ```natural
-IF #MES = 12
-  MOVE 'D' TO #TIPO-PGTO
-  COMPUTE #VLR-13 = #VLR-BASE * #FATOR-REG * #FATOR-IDADE
-  ...
-  COMPUTE #VLR-BRUTO = #VLR-BENF + #VLR-13
-*
-* ABONO NATALINO - 15% ADICIONAL PARA PROGRAMAS TIPO 'A'
-  IF #TIPO-PROG = 'A'
-    COMPUTE #VLR-ABONO = #VLR-BENF * 0.15
-    ...
-    COMPUTE #VLR-BRUTO = #VLR-BRUTO + #VLR-ABONO
-  END-IF
-END-IF
+MOVE 1 TO PAGAMENTO-V.COD-BANCO
 ```
 
-- **O que esperávamos**: cálculo uniforme nos 12 meses.
-- **O que o código faz**: em dezembro adiciona um 13º calculado com fórmula **diferente** (sem `FATOR-FAM` nem `FATOR-RND` nem reajuste) e, se o programa for tipo 'A', soma 15% de abono natalino sobre o benefício mensal.
-- **Hipótese do time**: regra trazida por "ALTERADO 30/11/2001 - INC 13O SALARIO" e "ALTERADO 22/12/2009 - ABONO NATALINO". O 13º propositalmente ignora família/renda — equivale a "salário-base regional ajustado por idade".
-- **Risco se ignorarmos**: beneficiários perdem 13º e abono em dezembro → impacto financeiro direto. Specs EARS PRECISAM ter um REQ separado para dezembro.
+- **O que esperávamos**: campo preenchido com o banco efetivo do retorno.
+- **O que o código faz**: força BB, embora o campo `#CNAB-BANCO` tenha sido lido do registro.
+- **Hipótese do time**: como Banco Real foi descontinuado, "todo pagamento é BB" virou invariante de fato.
+- **Risco se ignorarmos**: spec moderna deve usar o código real do banco (multi-banco real) — confirmar com PO.
 
 ---
 
-### MYS-005: Truncagem sistemática causa perda de centavos
+### MYS-006: Códigos de retorno bancário desconhecidos não atualizam status
 
-- **Arquivo**: `01-arqueologia/legado-sifap/natural-programs/CALCBENF.NSN#L213-L262` (e múltiplos outros pontos)
-- **Trecho de código** (padrão repetido):
-
-```natural
-* TRUNCAR P/ 2 CASAS DECIMAIS - PADRAO MAINFRAME
-COMPUTE #VLR-TEMP = #VLR-BENF * 100
-COMPUTE #VLR-BENF = #VLR-TEMP / 100
-```
-
-Ocorrências adicionais:
-- `CALCBENF.NSN` L213, L233, L242, L262
-- `CALCDSCT.NSN` L62-65, L177-178
-- `CALCCORR.NSN` L113-114
-
-- **O que esperávamos**: arredondamento HALF_UP (banker's rounding) como em sistemas financeiros modernos.
-- **O que o código faz**: `#VLR-TEMP` é `N11` (inteiro) — multiplica por 100 e divide por 100 **truncando** a parte fracionária além da segunda casa. R$ 123,4567 vira R$ 123,45 (sempre arredonda para baixo).
-- **Hipótese do time**: convenção mainframe ("PADRAO MAINFRAME" no comentário). Acumulado em milhões de pagamentos representa receita "perdida" para o beneficiário.
-- **Risco se ignorarmos**: usar `BigDecimal.setScale(2, HALF_UP)` em Java diverge do legado. Testes de equivalência vão falhar em centavos. Decisão necessária: replicar `RoundingMode.DOWN` ou modernizar (e documentar o ganho do beneficiário em ADR).
-
----
-
-### MYS-006: Desconto Judicial sem teto — exceção silenciosa
-
-- **Arquivo**: `01-arqueologia/legado-sifap/natural-programs/CALCDSCT.NSN#L121-L158`
+- **Arquivo**: `01-arqueologia/legado-sifap/natural-programs/BATCHCON.NSN#L183-L186`
 - **Trecho de código**:
 
 ```natural
-VALUE 'J'
-* DESCONTO JUDICIAL - VALOR FIXO OU PERCENTUAL
-  ...
-* JUDICIAL NAO TEM TETO
-  ADD #VLR-DSCT-ITEM TO #VLR-TOTAL-DSCT
-...
-* APLICAR TETO 30% - EXCETO JUDICIAL
-IF #TIPO-DSCT NE 'J'
-  IF #VLR-TOTAL-DSCT > #VLR-MAX-DSCT
-    MOVE #VLR-MAX-DSCT TO #VLR-TOTAL-DSCT
-  END-IF
-END-IF
+NONE
+  COMPRESS 'COD RETORNO DESCONHECIDO:' #COD-RET
+      ' CPF=' #CNAB-CPF INTO #MSG
+  WRITE #MSG
 ```
 
-- **O que esperávamos**: teto de 30% do bruto se aplica a todos os tipos de desconto.
-- **O que o código faz**: tipo `J` (Judicial) é deliberadamente excluído do teto. Líquido pode ser zero ou negativo.
-- **Hipótese do time**: ordens judiciais (penhora, dívida tributária) têm precedência legal — o legislador/jurisdição obriga retenção integral, mesmo que zere o benefício.
-- **Risco se ignorarmos**: aplicar teto 30% em desconto judicial = descumprimento de ordem judicial → responsabilidade legal do órgão. EARS REQ deve explicitar a exceção.
+- **O que esperávamos**: status do pagamento atualizado para algo como "erro" ou "manual".
+- **O que o código faz**: apenas escreve no log e segue. Pagamento fica em status `G` (Gerado) eternamente.
+- **Hipótese do time**: alguém iria processar o log manualmente. Provavelmente ninguém faz.
+- **Risco se ignorarmos**: dívida operacional silenciosa — pagamentos "fantasma" no sistema. Investigar quantos existem hoje.
 
 ---
 
-### INC-004: Duas implementações divergentes de cálculo de desconto
+### MYS-007 / MYS-008 / MYS-009 / MYS-010
 
-- **Arquivo A**: `CALCBENF.NSN#L307-L315` (subrotina interna `CALC-DESCONTOS`)
-- **Arquivo B**: `CALCDSCT.NSN` (programa completo)
-
-- **Trecho de código A** (CALCBENF — simplificado):
-
-```natural
-DEFINE SUBROUTINE CALC-DESCONTOS
-  MOVE 0 TO #VLR-DESC
-* DESCONTO BASICO - 3% CONTRIB SOCIAL
-  IF #VLR-BRUTO > 500.00
-    COMPUTE #VLR-DESC = #VLR-BRUTO * 0.03
-    ...
-  END-IF
-END-SUBROUTINE
-```
-
-- **O que esperávamos**: um único algoritmo de desconto, reutilizado.
-- **O que o código faz**: `CALCBENF` aplica uma versão simplificada hardcoded (apenas 3% fixo acima de R$ 500), enquanto `CALCDSCT` aplica a tabela completa de 4 faixas + PE de descontos personalizados + tipos J/P/I/S/A.
-- **Hipótese do time**: `CALCBENF` chama internamente sua versão "simplificada" só para gerar o `VLR-LIQUIDO` inicial; depois `CALCDSCT` é executado em batch e sobrescreve. Mas se `CALCDSCT` não rodar, fica o cálculo errado.
-- **Risco se ignorarmos**: na migração, replicar só uma das duas lógicas gera pagamentos com valores divergentes do legado. Pior: a sequência de execução (online → batch) precisa ser preservada ou unificada.
+> Detalhamento pendente — Par 2 vai expandir antes de H1 caso o tempo permita. Linha na tabela acima é suficiente para o gate.
 
 ---
 
@@ -202,33 +176,17 @@ END-SUBROUTINE
 
 > Dica: existem **3 easter eggs** escondidos no código legado. Registre aqui os que encontrar:
 
-1. [x] **EGG-001 — Plano Verão (1989–1991):** bloco comentado em `CALCCORR.NSN#L62-L72` mantém código de correção monetária da transição Cruzado→Cruzeiro, com fator `2.7500` e ajuste adicional `1.4289` para competências antes de jul/1989. Comentário: "NAO REMOVER (HISTORICO) - RESPONSAVEL: JOAO BATISTA - 15/03/2003".
-
-```natural
-* CORRECAO PLANO VERAO - PERIODO 01/1989 A 01/1991
-* UTILIZADO DURANTE TRANSICAO MOEDA CRUZADO->CRUZEIRO
-*  IF #COMP-INI >= 198901 AND #COMP-INI <= 199101
-*    COMPUTE #IND-ACUM = #IND-ACUM * 2.7500
-*    IF #COMP-INI < 198907
-*      COMPUTE #IND-ACUM = #IND-ACUM * 1.4289
-*    END-IF
-*    MOVE 'V' TO PAGAMENTO-V.IND-CORRIGIDO
-*  END-IF
-```
-
-2. [ ] Easter Egg 2: _(buscar nos demais programas — VAL*, BATCH*, CAD*, CONS*, REL*)_
-3. [ ] Easter Egg 3: _(buscar nos demais programas)_
+1. [ ] Easter Egg 1: **não encontrado neste lote (BATCHCON/BATCHREL/BATCHPGT)** — verificar com pares 1, 3, 4, 5
+2. [ ] Easter Egg 2: \_\_\_
+3. [ ] Easter Egg 3: \_\_\_
 
 ## Resumo
 
-- Total de mistérios encontrados: **7** (6 mistérios + 1 inconsistência catalogada)
-- Confiança alta: **6** (MYS-002, MYS-004, MYS-005, MYS-006, INC-004, EGG-001)
-- Confiança média: **1** (MYS-003)
-- Confiança baixa: 0
-- Easter eggs encontrados: **1** / 3
-
-> Mistérios ainda em aberto (não visíveis nos 3 programas CALC* — investigar nos demais):
-> MYS-001 (alteração silenciosa de status), MYS-007 (CPFs sem validação), MYS-008 (região que pula elegibilidade), MYS-009 (ordem batch ilógica), MYS-010 (evento de auditoria ocultado), EGG-002 (backdoor de validação), EGG-003 (integração com empresa morta).
+- Total de mistérios encontrados: **10**
+- Confiança alta: **6**
+- Confiança média: **3**
+- Confiança baixa: **1**
+- Easter eggs encontrados: **0 / 3** (Par 2 não cobre os programas onde costumam estar — CAD*/CALC*/VAL*/CONS*/REL*)
 
 ---
 
