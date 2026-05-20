@@ -1,0 +1,303 @@
+openapi: 3.1.0
+info:
+  title: SIFAP 2.0 API
+  version: 0.1.0
+  description: |
+    Esqueleto OpenAPI do SIFAP 2.0 — Estágio 2 (Spec).
+    Cobre endpoints mínimos por bounded context para destravar o Estágio 3.
+    Detalhes (request/response completos, exemplos, erros) serão refinados via /speckit.plan.
+  contact:
+    name: Os Laranjinhas
+servers:
+  - url: https://api.sifap.dev.example/api/v1
+    description: Dev
+  - url: https://api.sifap.stg.example/api/v1
+    description: Staging
+  - url: https://api.sifap.example/api/v1
+    description: Production
+
+security:
+  - oauth2_aad: []
+
+tags:
+  - name: beneficiary
+    description: Cadastro, consulta e validação de beneficiários (consolidando VAL*)
+  - name: program-catalog
+    description: Programas sociais e regras de elegibilidade
+  - name: payment
+    description: Geração de ciclo, consulta e transição de status de pagamentos
+  - name: reconciliation
+    description: Importação CNAB 240 e conciliação bancária
+  - name: audit
+    description: Trilha append-only com hash-chain verificável
+
+paths:
+  # ==================== beneficiary ====================
+  /beneficiaries:
+    get:
+      tags: [beneficiary]
+      summary: Lista beneficiários (paginado)
+      parameters:
+        - in: query
+          name: status
+          schema: { type: string, enum: [A, S, C, D] }
+        - in: query
+          name: page
+          schema: { type: integer, default: 0 }
+        - in: query
+          name: size
+          schema: { type: integer, default: 20, maximum: 100 }
+      responses:
+        '200':
+          description: Página de beneficiários com CPF mascarado (REQ-BEN-005)
+    post:
+      tags: [beneficiary]
+      summary: Cadastra beneficiário (REQ-BEN-001/003/004)
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/BeneficiaryCreate' }
+      responses:
+        '201': { description: Criado }
+        '400': { description: CPF inválido (REQ-BEN-001) ou backdoor bloqueada (REQ-BEN-002) }
+        '409': { description: CPF já cadastrado (REQ-BEN-003) }
+  /beneficiaries/{id}:
+    get:
+      tags: [beneficiary]
+      summary: Consulta beneficiário (CPF mascarado por default)
+      parameters:
+        - in: path
+          name: id
+          required: true
+          schema: { type: string, format: uuid }
+        - in: query
+          name: unmask
+          description: Apenas perfil AUD/ADM/SUP; retorna CPF cru (auditado)
+          schema: { type: boolean, default: false }
+      responses:
+        '200': { description: Beneficiário encontrado }
+        '404': { description: Não encontrado }
+  /beneficiaries/{id}/dependents:
+    post:
+      tags: [beneficiary]
+      summary: Adiciona dependente (REQ-BEN-006)
+      parameters:
+        - in: path
+          name: id
+          required: true
+          schema: { type: string, format: uuid }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/DependentCreate' }
+      responses:
+        '201': { description: Criado }
+        '409': { description: Limite max_dependents atingido (BR-039) ou CPF duplicado (BR-041) }
+
+  # ==================== program-catalog ====================
+  /programs:
+    get:
+      tags: [program-catalog]
+      summary: Lista programas sociais
+      parameters:
+        - in: query
+          name: status
+          schema: { type: string, enum: [A, I] }
+      responses:
+        '200': { description: Lista }
+    post:
+      tags: [program-catalog]
+      summary: Cadastra programa (REQ-PRG-001) — perfil ADM
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/ProgramCreate' }
+      responses:
+        '201': { description: Criado }
+        '403': { description: Requer perfil ADM }
+
+  # ==================== payment ====================
+  /payments:
+    get:
+      tags: [payment]
+      summary: Lista pagamentos por competência
+      parameters:
+        - in: query
+          name: competencia
+          required: true
+          schema: { type: integer, example: 202605, description: AAAAMM (BR-024) }
+        - in: query
+          name: status
+          schema: { type: string, enum: [G, P, D, E, C] }
+        - in: query
+          name: cpf
+          schema: { type: string, pattern: '^[0-9]{11}$' }
+      responses:
+        '200': { description: Página de pagamentos }
+  /payments/cycles:
+    post:
+      tags: [payment]
+      summary: Dispara ciclo mensal (REQ-PAY-001) — perfil ADM
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [competencia]
+              properties:
+                competencia: { type: integer, example: 202605 }
+                programIds:
+                  type: array
+                  items: { type: string, format: uuid }
+                  description: Se omitido, processa todos os programas ativos
+      responses:
+        '202':
+          description: Job aceito; status assíncrono via batch runner
+        '409':
+          description: Ciclo idempotente — já existem pagamentos para essa competência (BR-012)
+  /payments/{id}/cancel:
+    post:
+      tags: [payment]
+      summary: Cancela pagamento em status G (REQ-PAY-007) — perfil ADM
+      parameters:
+        - in: path
+          name: id
+          required: true
+          schema: { type: string, format: uuid }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [motivo]
+              properties:
+                motivo: { type: string, minLength: 10 }
+      responses:
+        '200': { description: Cancelado }
+        '403': { description: Requer perfil ADM }
+        '409': { description: Estado não permite cancelamento (BR-010) }
+        '400': { description: Motivo ausente ou < 10 caracteres }
+
+  # ==================== reconciliation ====================
+  /reconciliations/cnab:
+    post:
+      tags: [reconciliation]
+      summary: Importa arquivo CNAB 240 (REQ-REC-001/002)
+      requestBody:
+        required: true
+        content:
+          multipart/form-data:
+            schema:
+              type: object
+              required: [file, codBanco]
+              properties:
+                file: { type: string, format: binary }
+                codBanco: { type: integer, example: 1, description: 'BB=1, multi-banco habilitado (fim do MYS-005)' }
+      responses:
+        '202':
+          description: Importação iniciada; status assíncrono
+  /reconciliations/divergences:
+    get:
+      tags: [reconciliation]
+      summary: Lista divergências pendentes (status MATCHED com diff > R$ 0,01 ou UNKNOWN_CODE)
+      responses:
+        '200': { description: Lista paginada }
+
+  # ==================== audit ====================
+  /audit/events:
+    get:
+      tags: [audit]
+      summary: Consulta trilha (REQ-AUD-002 — mascaramento por perfil)
+      parameters:
+        - in: query
+          name: from
+          schema: { type: string, format: date-time }
+        - in: query
+          name: to
+          schema: { type: string, format: date-time }
+        - in: query
+          name: context
+          schema: { type: string, enum: [beneficiary, program-catalog, payment, reconciliation] }
+        - in: query
+          name: actorId
+          schema: { type: string }
+      responses:
+        '200': { description: Página de eventos }
+  /audit/verify:
+    get:
+      tags: [audit]
+      summary: Verifica integridade da hash-chain (REQ-AUD-001)
+      responses:
+        '200':
+          description: Chain válida
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  valid: { type: boolean }
+                  lastSeq: { type: integer }
+        '409':
+          description: Chain quebrada — retorna seq da primeira inconsistência
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  valid: { type: boolean, example: false }
+                  brokenAtSeq: { type: integer }
+
+components:
+  securitySchemes:
+    oauth2_aad:
+      type: oauth2
+      description: Azure AD / Entra ID — perfis ADM/OPR/CON/AUD/SUP no scope claim
+      flows:
+        authorizationCode:
+          authorizationUrl: https://login.microsoftonline.com/{tenantId}/oauth2/v2.0/authorize
+          tokenUrl: https://login.microsoftonline.com/{tenantId}/oauth2/v2.0/token
+          scopes:
+            sifap.read: Consulta read-only
+            sifap.write: Operações de escrita
+            sifap.admin: Operações administrativas
+            sifap.audit: Acesso a trilha e dados sem máscara
+  schemas:
+    BeneficiaryCreate:
+      type: object
+      required: [cpf, nomeCompleto, dtNascimento, codRegiao]
+      properties:
+        cpf: { type: string, pattern: '^[0-9]{11}$', description: 'Validado por REQ-BEN-001; backdoors bloqueadas (REQ-BEN-002)' }
+        nis: { type: string, pattern: '^[0-9]{11}$' }
+        nomeCompleto: { type: string, minLength: 3, maxLength: 120 }
+        dtNascimento: { type: string, format: date }
+        codRegiao: { type: integer, minimum: 1, maximum: 27 }
+        rendaFamiliar: { type: number, format: double, minimum: 0 }
+    DependentCreate:
+      type: object
+      required: [cpfDep, nomeDep, dtNascimento, parentesco]
+      properties:
+        cpfDep: { type: string, pattern: '^[0-9]{11}$' }
+        nomeDep: { type: string, minLength: 3, maxLength: 120 }
+        dtNascimento: { type: string, format: date }
+        parentesco: { type: string, enum: [FI, CO, IR, OU], description: 'BR-040' }
+    ProgramCreate:
+      type: object
+      required: [codigo, nome, tipo, vlrBase]
+      properties:
+        codigo: { type: string, maxLength: 20 }
+        nome: { type: string, maxLength: 120 }
+        tipo: { type: string, enum: [A, B, C, D] }
+        vlrBase: { type: number, format: double, minimum: 0 }
+        fatorReajuste: { type: number, format: double, minimum: 0, maximum: 1 }
+    ErrorResponse:
+      type: object
+      required: [code, message]
+      properties:
+        code: { type: string, example: VALIDATION_ERROR.cpf.invalid }
+        message: { type: string }
+        details: { type: object }
