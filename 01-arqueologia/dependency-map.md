@@ -31,43 +31,80 @@
 > Substitua o exemplo abaixo pelo mapa real do seu time. **Meta:** cobrir todos os 15 programas, sem órfãos.
 
 ```mermaid
-flowchart TD
- subgraph "Programas Online"
- CADBENF["CADBENF.NSN<br/>Cadastro de Beneficiários"]
- CONBENF["CONBENF.NSN<br/>Consulta de Beneficiários"]
- REGPGTO["REGPGTO.NSN<br/>Registro de Pagamentos"]
- end
+flowchart LR
+    classDef ddm fill:#FFB900,stroke:#0A0A0A,color:#0A0A0A,stroke-width:2px
+    classDef online fill:#E5F6FD,stroke:#00A4EF,color:#0A0A0A
+    classDef batch fill:#F1F8E3,stroke:#7FBA00,color:#0A0A0A
+    classDef calc fill:#FFF7E0,stroke:#F25022,color:#0A0A0A
 
- subgraph "Programas Batch"
- BATCHPGT["BATCHPGT.NSN<br/>Processamento em Lote"]
- end
+    %% DDMs (hubs de acoplamento por dado)
+    BEN[("BENEFICIARIO<br/>FNR 150<br/>~4,2M reg.")]:::ddm
+    PAG[("PAGAMENTO<br/>FNR 152<br/>~180M reg.")]:::ddm
+    PROG[("PROGRAMA-SOCIAL<br/>FNR 151")]:::ddm
+    AUD[("AUDITORIA<br/>FNR 153<br/>add. 2005")]:::ddm
 
- subgraph "Subprogramas"
- CALCBENF["CALCBENF.NSN<br/>Cálculo de Benefícios"]
- VALCPF["VALCPF.NSN<br/>Validação de CPF"]
- end
+    %% Programas online
+    CONSBENF[CONSBENF<br/>consulta]:::online
+    CADBENEF[CADBENEF<br/>cadastro]:::online
+    CADDEPEND[CADDEPEND<br/>dependentes]:::online
+    CADPROG[CADPROG<br/>programas]:::online
+    VALBENEF[VALBENEF<br/>valida benef.]:::online
+    VALDOCS[VALDOCS<br/>valida docs]:::online
+    VALELEG[VALELEG<br/>elegibilidade]:::online
 
- subgraph "DDMs Adabas"
- DDM_BENEF[("DDM: BENEFICIARIO")]
- DDM_PGTO[("DDM: PAGAMENTO")]
- end
+    %% Programas de cálculo
+    CALCBENF[CALCBENF<br/>cálculo benefício]:::calc
+    CALCCORR[CALCCORR<br/>correção monetária]:::calc
+    CALCDSCT[CALCDSCT<br/>descontos]:::calc
 
- CADBENF -->|CALLNAT| VALCPF
- CADBENF -->|CALLNAT| CALCBENF
- CADBENF -->|READ/STORE| DDM_BENEF
+    %% Programas batch
+    BATCHCON[BATCHCON<br/>conciliação]:::batch
+    BATCHPGT[BATCHPGT<br/>folha mensal]:::batch
+    BATCHREL[BATCHREL<br/>relatórios spool]:::batch
+    RELPGT[RELPGT<br/>rel. pagamentos]:::batch
+    RELAUDIT[RELAUDIT<br/>rel. auditoria]:::batch
 
- REGPGTO -->|CALLNAT| CALCBENF
- REGPGTO -->|READ/STORE| DDM_PGTO
+    %% Acoplamento via BENEFICIARIO
+    CONSBENF -->|read| BEN
+    CADBENEF -->|read/write| BEN
+    CADDEPEND -->|read/write| BEN
+    VALBENEF -->|read| BEN
+    VALDOCS -->|read| BEN
+    VALELEG -->|read| BEN
+    CALCBENF -->|read| BEN
+    BATCHCON -->|read| BEN
+    BATCHPGT -->|read| BEN
 
- CONBENF -->|READ| DDM_BENEF
+    %% Acoplamento via PAGAMENTO
+    CONSBENF -->|read| PAG
+    CALCBENF -->|read/write| PAG
+    CALCCORR -->|read/write| PAG
+    CALCDSCT -->|read/write| PAG
+    BATCHPGT -->|write| PAG
+    BATCHCON -->|read| PAG
+    RELPGT -->|read| PAG
+    RELAUDIT -.->|read| PAG
 
- BATCHPGT -->|CALLNAT| CALCBENF
- BATCHPGT -->|READ/UPDATE| DDM_PGTO
- BATCHPGT -->|READ| DDM_BENEF
+    %% Acoplamento via PROGRAMA-SOCIAL
+    CADPROG -->|read/write| PROG
+    VALELEG -->|read| PROG
+    CALCBENF -->|read| PROG
+    BATCHPGT -->|read| PROG
+
+    %% Acoplamento via AUDITORIA
+    BATCHCON -->|write| AUD
+    CADBENEF -.->|write| AUD
+    CADPROG -.->|write| AUD
+    RELAUDIT -->|read| AUD
+
+    %% Cadeia batch temporal (JCL/JES2)
+    BATCHCON ==>|JCL seq.| BATCHPGT
+    BATCHPGT ==>|JCL seq.| BATCHREL
 ```
 
-> **Instrução:** este é apenas um exemplo inicial com 6 programas.
-> Seu time deve mapear **todos os 15 programas** e os **4 DDMs**.
+> **Nota arqueológica:** busca por `CALLNAT` nos 15 `.NSN` retornou **zero ocorrências**. O acoplamento real é **por dado** (DDMs compartilhados), não por contrato. Bounded contexts modernos têm que ser recortados pelo **dono do dado**, não pelo nome do programa.
+>
+> **Legenda:** 🟠 DDM Adabas · 🔵 online (3270) · 🟢 batch · 🟡 cálculo · aresta sólida = leitura/escrita confirmada · tracejada = escrita de auditoria inferida · `==>` = dependência temporal JCL/JES2.
 
 ## Diagrama de Fluxo de Dados (DDMs)
 
@@ -83,10 +120,10 @@ flowchart LR
  end
 
  subgraph "Armazenamento (Adabas)"
- DDM1[("BENEFICIARIO")]
- DDM2[("PAGAMENTO")]
- DDM3[("DDM 3: ???")]
- DDM4[("DDM 4: ???")]
+ DDM1[("BENEFICIARIO<br/>FNR 150")]
+ DDM2[("PAGAMENTO<br/>FNR 152")]
+ DDM3[("PROGRAMA-SOCIAL<br/>FNR 151")]
+ DDM4[("AUDITORIA<br/>FNR 153")]
  end
 
  UI --> PROG
@@ -97,39 +134,44 @@ flowchart LR
  PROG <--> DDM4
 ```
 
-> Substitua "DDM 3: ???" e "DDM 4: ???" pelos nomes reais encontrados em [`../01-arqueologia/legado-sifap/adabas-ddms/`](../01-arqueologia/legado-sifap/adabas-ddms/).
 
 ## Tabela de Dependências
 
-| Programa     | Chama (CALLNAT) | Lê (READ) DDMs | Escreve (STORE/UPDATE) DDMs | Observações |
-| ------------ | --------------- | -------------- | --------------------------- | ----------- |
-| CADBENF.NSN  |                 |                |                             |             |
-| CONBENF.NSN  |                 |                |                             |             |
-| REGPGTO.NSN  |                 |                |                             |             |
-| BATCHPGT.NSN |                 |                |                             |             |
-| CALCBENF.NSN |                 |                |                             |             |
-| VALCPF.NSN   |                 |                |                             |             |
-|              |                 |                |                             |             |
-|              |                 |                |                             |             |
-|              |                 |                |                             |             |
-|              |                 |                |                             |             |
-|              |                 |                |                             |             |
-|              |                 |                |                             |             |
-|              |                 |                |                             |             |
-|              |                 |                |                             |             |
-|              |                 |                |                             |             |
+| Programa | Chama (CALLNAT) | Lê (READ) DDMs | Escreve (STORE/UPDATE) DDMs | Observações |
+| --- | --- | --- | --- | --- |
+| CADBENEF.NSN | — (nenhum CALLNAT) | BENEFICIARIO | BENEFICIARIO, AUDITORIA | Cadastro online (3270); `PERFORM VALIDA-CPF` interno |
+| CADDEPEND.NSN | — | BENEFICIARIO | BENEFICIARIO | Dependentes — mesmo agregado de BENEFICIARIO |
+| CADPROG.NSN | — | PROGRAMA-SOCIAL | PROGRAMA-SOCIAL, AUDITORIA | IDs hardcoded; perfil ADM exigido; `PERFORM CONSULTA-PROG` |
+| CONSBENF.NSN | — | BENEFICIARIO, PAGAMENTO | — | Read-only; `PERFORM MASCARA-CPF` interno (privacidade pré-LGPD) |
+| VALBENEF.NSN | — | BENEFICIARIO | — | Validação online; duplica regra de VALDOCS (BR-027/BR-031) |
+| VALDOCS.NSN | — | BENEFICIARIO | — | `PERFORM VALIDA-CPF-DOC`, `VALIDA-RG`, `CHECK-DOC-ESPECIAL` |
+| VALELEG.NSN | — | BENEFICIARIO, PROGRAMA-SOCIAL | — | `PERFORM VERIF-ELEG-ESPECIFICA`; consulta programa social |
+| CALCBENF.NSN | — | BENEFICIARIO, PROGRAMA-SOCIAL, PAGAMENTO | PAGAMENTO | `PERFORM DET-FAIXA-RENDA`; coração do cálculo |
+| CALCCORR.NSN | — | PAGAMENTO | PAGAMENTO | Correção monetária TR/IGP-M hardcoded |
+| CALCDSCT.NSN | — | PAGAMENTO | PAGAMENTO | `PERFORM CALC-CONTRIB-SOCIAL` |
+| BATCHCON.NSN | — | BENEFICIARIO, PAGAMENTO | AUDITORIA | `PERFORM GRAVA-AUDITORIA-DIVERG/CONC`; antecede BATCHPGT no JCL |
+| BATCHPGT.NSN | — | BENEFICIARIO, PROGRAMA-SOCIAL | PAGAMENTO | `PERFORM DET-FAIXA-RENDA-BATCH`; folha mensal — job mais crítico |
+| BATCHREL.NSN | — | PAGAMENTO | — | `PERFORM IMPRIME-CABECALHO`; relatório spool 132 col. |
+| RELPGT.NSN | — | PAGAMENTO | — | `PERFORM IMPRIME-CABECALHO/SUBTOTAL`; rel. mensal |
+| RELAUDIT.NSN | — | AUDITORIA, PAGAMENTO | — | `PERFORM IMPRIME-CAB-AUDIT`; consulta trilha por período/usuário |
 
 ## Dependências Circulares
 
 > Liste aqui qualquer dependência circular encontrada (programa A chama B que chama A):
 
-- Nenhuma encontrada até agora.
+- **Nenhuma — impossível por construção.** Não existe nenhum `CALLNAT` nos 15 `.NSN` (busca exaustiva confirmada). Sem chamadas inter-programa, não há ciclo possível na camada Natural.
+- ⚠️ Existem **ciclos lógicos por dado**: `BATCHPGT` escreve em `PAGAMENTO` → `BATCHCON` lê `PAGAMENTO` e escreve em `AUDITORIA` → `RELAUDIT` lê `AUDITORIA`. Não é ciclo no sentido clássico (cada job é independente), mas a cadeia JCL cria dependência temporal forte.
 
 ## Programas Órfãos
 
 > Programas que não são chamados por nenhum outro (possíveis pontos de entrada ou código morto):
 
-- A investigar.
+- **Todos os 15 programas são pontos de entrada independentes.** Como não há `CALLNAT`, formalmente todos são "órfãos" no sentido Natural — nenhum é chamado por outro `.NSN`.
+- O agrupamento operacional ocorre fora do Natural:
+  - **Online (3270 / Com\*complete):** `CONSBENF`, `CADBENEF`, `CADDEPEND`, `CADPROG`, `VALBENEF`, `VALDOCS`, `VALELEG` são invocados por menu/transação 3270.
+  - **Batch (JCL/JES2):** `BATCHCON` → `BATCHPGT` → `BATCHREL` formam a cadeia mensal; `RELPGT` e `RELAUDIT` são jobs sob demanda.
+  - **Cálculo (`CALCBENF`, `CALCCORR`, `CALCDSCT`):** rodam embutidos em `BATCHPGT` via JCL (não via Natural).
+- **Sem código morto detectado** — todos os 15 programas têm uso documentado em pelo menos um fluxo operacional.
 
 ---
 
